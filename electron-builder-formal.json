@@ -1,0 +1,31 @@
+{
+  "appId": "com.workbuddy.stockmonitor.formal",
+  "productName": "紫金红葫芦-正式版",
+  "electronVersion": "22.3.27",
+  "copyright": "WorkBuddy",
+  "extraMetadata": {
+    "main": "electron/main-win7.mjs",
+    "productName": "紫金红葫芦-正式版",
+    "version": "1.0.10"
+  },
+  "directories": {
+    "output": "release-formal"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-server/win7-server.cjs",
+    "electron/main-win7.mjs",
+    "electron/preload.mjs",
+    "electron/assets/**/*",
+    "package.json"
+  ],
+  "win": {
+    "target": [{ "target": "portable", "arch": ["x64"] }],
+    "icon": "build/icon.ico",
+    "artifactName": "紫金红葫芦-正式版-${version}-${arch}.exe"
+  },
+  "asar": true,
+  "asarUnpack": ["dist-server/win7-server.cjs"],
+  "compression": "maximum",
+  "npmRebuild": false
+}

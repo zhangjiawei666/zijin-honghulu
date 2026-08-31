@@ -1,0 +1,18 @@
+{
+  "name": "紫金红葫芦 - 自选股行情监控",
+  "short_name": "紫金红葫芦",
+  "description": "自选股行情监控与5个标准买点提醒",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F9F3E9",
+  "theme_color": "#9D2933",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

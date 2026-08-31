@@ -1,0 +1,9 @@
+# 统一换行符，避免跨平台协作时 CRLF/LF 混乱
+* text=auto eol=lf
+
+# 二进制文件不对其做文本转换
+*.exe binary
+*.ico binary
+*.png binary
+*.jpg binary
+*.mjs text eol=lf

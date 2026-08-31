@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Error>
+  <Code>NoSuchKey</Code>
+  <Message>The specified key does not exist.</Message>
+  <RequestId>6A8EC5C8BFF5A2303066BB81</RequestId>
+  <HostId>npmmirror.oss-cn-shanghai.aliyuncs.com</HostId>
+  <Key>binaries/electron-builder-binaries/rcedit-x64/rcedit-x64.exe</Key>
+  <EC>0026-00000001</EC>
+  <RecommendDoc>https://api.aliyun.com/troubleshoot?q=0026-00000001</RecommendDoc>
+</Error>
