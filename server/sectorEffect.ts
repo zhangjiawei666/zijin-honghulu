@@ -50,7 +50,7 @@ interface MatrixRow {
   source: string | null;     // 数据来源，用于区分模板历史与实时抓取
   dayType: DisplayDayType;   // 最终展示类型，已把"今日待更新"合并进来
   isToday: boolean;          // 是否为今天（前端用于自动滚动定位）
-  cells: (SectorCell | null)[];
+  cells?: (SectorCell | null)[];
 }
 
 interface SectorCell {
@@ -239,8 +239,8 @@ function alignRow(
   sectors: Array<{ name: string; count: number }>,
   mapping: Map<string, number>,
   maxCols: number
-): (Array<{ name: string; count: number }> | null)[] {
-  const row: (Array<{ name: string; count: number }> | null)[] = new Array(maxCols).fill(null);
+): ({ name: string; count: number } | null)[] {
+  const row: ({ name: string; count: number } | null)[] = new Array(maxCols).fill(null);
   for (const sec of sectors) {
     const targetCol = mapping.get(sec.name);
     if (targetCol !== undefined && targetCol < maxCols) {
@@ -400,7 +400,27 @@ function importBuiltinHistory(force = false): { added: number; updated: number; 
       row.day_type || (sectors.length > 0 ? "trading" : "holiday");
 
     const existing = db.getSectorEffectByDate(dateToken);
-    // 非强制模式下，已存在的日期保留现有数据（可能是实时抓取更新的）
+
+    // 休市日（周末/法定节假日）：历史文件是唯一真相源，每次启动都强制修正
+    // day_type 并清空板块数据。防止旧版误把周末标为 trading 并写入脏数据
+    // （如照搬腾讯文档列号 "1/2/3"、备注"低吸"等），也避免已入库旧脏数据残留。
+    // 依据 sector-limitup-daily skill：周末/节假日不写入当日虚构数据。
+    if (dayType !== "trading") {
+      db.upsertSectorEffect({
+        date: dateToken,
+        day_type: dayType,
+        sectors_json: "[]",
+        total_limit_up: 0,
+        source: HISTORY_SOURCE,
+        substituted_date: null,
+        created_at: existing?.created_at || new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      if (existing) updated += 1; else added += 1;
+      continue;
+    }
+
+    // 非强制模式下，已存在的交易日保留现有数据（可能是实时抓取更新的）
     if (existing && !force) continue;
 
     db.upsertSectorEffect({
@@ -431,8 +451,39 @@ function importBuiltinHistory(force = false): { added: number; updated: number; 
  * 安全性：importBuiltinHistory(false) 内部对已存在的日期执行 continue（不覆盖），
  * 因此重复调用只会补齐缺失的周末/节假日行，不会影响已有交易日数据。
  */
+/** 清理已入库板块效应数据中的"照搬腾讯文档"脏单元格：
+ * 纯数字名（列号 1/2/3）或已知备注（低吸/按兵/长期/直接看/备注）等。
+ * 仅删除垃圾单元格、保留真实板块数据；对老版本已入库的旧脏数据做一次性纠正。
+ * 依据 sector-limitup-daily skill：不把列号/备注臆造成板块名。 */
+function cleanupGarbageSectors(): number {
+  let cleaned = 0;
+  const isGarbage = (nm: string) => {
+    const t = (nm || '').trim();
+    return /^\d+$/.test(t) || ['低吸', '按兵', '长期', '直接看', '备注', '长期，直接看ETF'].includes(t);
+  };
+  const rows = db.getSectorEffectAll(100000);
+  for (const r of rows) {
+    let secs: Array<{ name: string; count: number }> = [];
+    try { secs = JSON.parse(r.sectors_json); } catch { continue; }
+    if (!Array.isArray(secs) || secs.length === 0) continue;
+    const filtered = secs.filter(s => !isGarbage(s.name));
+    if (filtered.length !== secs.length) {
+      db.upsertSectorEffect({
+        date: r.date, day_type: r.day_type, sectors_json: JSON.stringify(filtered),
+        total_limit_up: filtered.reduce((s, x) => s + (x.count || 0), 0),
+        source: r.source, substituted_date: r.substituted_date,
+        created_at: r.created_at, updated_at: new Date().toISOString(),
+      });
+      cleaned++;
+    }
+  }
+  return cleaned;
+}
+
 function ensureHistorySeeded(): void {
   try {
+    const gc = cleanupGarbageSectors();
+    if (gc > 0) console.log(`[SectorEffect] 启动清理：剔除 ${gc} 行照搬脏单元格`);
     const r = importBuiltinHistory(false);
     if (r.added > 0) {
       const trading = SECTOR_EFFECT_HISTORY.filter(x => x.day_type === 'trading').length;

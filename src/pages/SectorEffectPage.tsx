@@ -402,7 +402,7 @@ export function SectorEffectPage() {
             <Button size="large" variant="outline" icon={<History size={16} />} loading={importing} disabled={importing || loading} onClick={() => handleImportHistory(false)}>导入历史</Button>
           </Tooltip>
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--td-text-color-placeholder)' }}>
-            <Clock size={14} /><span>交易日 08:00 自动更新</span>
+            <Clock size={14} /><span>交易日次日 8 点更新</span>
           </div>
         </div>
       </Card>
@@ -518,7 +518,7 @@ export function SectorEffectPage() {
                         <td className="rest-cell" colSpan={Math.min(data.maxCols, 11)}
                           style={{ backgroundColor: restStyle.bg, color: restStyle.fg }}>
                           {restStyle.label}
-                          {row.dayType === 'today' && ' · 交易日 08:00 自动更新'}
+                          {row.dayType === 'today' && ' · 今日待更新，交易日次日 8 点更新'}
                         </td>
                       </tr>
                     );
