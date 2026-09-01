@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Card, Input, MessagePlugin, Tooltip } from 'tdesign-react';
 import { Flame, Loader, RefreshCw, Search, Clock, Database, History } from 'lucide-react';
 
@@ -16,9 +16,9 @@ interface MatrixRow {
   sectors: SectorCell[];
   totalLimitUp: number;
   substitutedDate: string | null;
-  source: string | null;     // 区分「腾讯文档模板历史」与「东财实时抓取」
-  dayType: DayType;          // 日期类型，决定整行渲染方式
-  isToday: boolean;          // 是否为今天（自动滚动定位锚点）
+  source: string | null;
+  dayType: DayType;
+  isToday: boolean;
   cells: (SectorCell | null)[];
 }
 
@@ -27,12 +27,12 @@ const DAY_TYPE_STYLE: Record<DayType, { label: string; bg: string; fg: string } 
   trading: null,
   weekend: { label: '周末休市', bg: '#f5f5f5', fg: '#8c8c8c' },
   holiday: { label: '节假日休市', bg: '#fff7e6', fg: '#d46b08' },
-  today: { label: '今日待更新', bg: '#f9f0ff', fg: '#722ed1' },
+  today:   { label: '今日待更新', bg: '#f9f0ff', fg: '#722ed1' },
 };
 
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
-/** 由 YYYY/M/D 推算星期，用于日期列辅助显示 */
+/** 由 YYYY/M/D 推算星期 */
 function weekdayOf(display: string): string {
   const parts = String(display || '').split('/').map(Number);
   if (parts.length !== 3 || parts.some(n => !Number.isFinite(n))) return '';
@@ -40,23 +40,23 @@ function weekdayOf(display: string): string {
   return WEEKDAYS[new Date(y, m - 1, d).getDay()] || '';
 }
 
+/** 从日期字符串提取月份 */
+function monthOf(dateStr: string): number {
+  const parts = String(dateStr || '').split('/').map(Number);
+  return parts.length >= 2 ? parts[1] : 0;
+}
+
 interface MatrixData {
   mode: 'matrix' | 'single';
   rows: MatrixRow[];
-  columns: string[];         // ['板块1', '板块2', ...]
+  columns: string[];
   maxCols: number;
   totalDates: number;
-  stats?: {                  // 日期类型统计
-    trading: number;
-    weekend: number;
-    holiday: number;
-    today: number;
-  };
+  stats?: { trading: number; weekend: number; holiday: number; today: number };
   source: string;
   generatedAt?: string;
   note?: string;
   error?: string;
-  // single mode fields
   requestedDate?: string;
   date?: string;
   substitutedDate?: string | null;
@@ -64,22 +64,29 @@ interface MatrixData {
   sectors?: SectorCell[];
 }
 
-/** 单日查询结果（用于单日模式回显） */
-interface SingleDayData {
-  requestedDate: string;
-  date: string;
-  substitutedDate: string | null;
-  totalLimitUp: number;
-  sectors: SectorCell[];
-  source: string;
-  generatedAt: string;
-  note: string;
-}
+const UP_COLOR = '#e02020';
+const CELL_BG_TOP = '#fff1f0';
+const CELL_BG_MID = '#f0f5ff';
+const CELL_BG_NORMAL = '#fafafa';
 
-const UP_COLOR = '#e02020';       // 涨停红（A股惯例）
-const CELL_BG_TOP = '#fff1f0';    // 前三名板块浅红底
-const CELL_BG_MID = '#f0f5ff';    // 中间板块浅蓝底
-const CELL_BG_NORMAL = '#fafafa'; // 普通灰底
+/** 月份标题描述（与效果图对齐） */
+const MONTH_NOTES: Record<number, string> = {
+  1: '正序排列，最早的日期在最上方',
+  2: '春节长假，连续休市完整保留',
+  3: '',
+  4: '',
+  5: '',
+  6: '',
+  7: '',
+  8: '',
+  9: '',
+  10: '',
+  11: '',
+  12: '',
+};
+
+/** 连续休市日超过此数量时折叠显示为省略行 */
+const COLLAPSE_THRESHOLD = 3;
 
 export function SectorEffectPage() {
   const [date, setDate] = useState('');
@@ -88,37 +95,12 @@ export function SectorEffectPage() {
   const [importing, setImporting] = useState(false);
   const [data, setData] = useState<MatrixData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [renderError, setRenderError] = useState<string | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const todayRowRef = useRef<HTMLTableRowElement | null>(null);
 
-  // 表格为正序（最早日期在顶部），打开时自动滚动定位到今天，
-  // 免得每次都要手动翻几百行才能看到最新数据。
-  // 使用手动 offset 计算而非 scrollIntoView，避免 sticky 表头/首列干扰。
-  useEffect(() => {
-    if (data?.mode !== 'matrix' || !data.rows?.length) return;
-    const timer = setTimeout(() => scrollToToday(), 150);
-    return () => clearTimeout(timer);
-  }, [data, scrollToToday]);
+  // ============= 数据加载 =============
 
-  /** 回到表格顶部（最早日期） */
-  const scrollToTop = () => {
-    wrapperRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  /** 跳到今天所在行（手动计算偏移量，避免 scrollIntoView 在 sticky 表格中失效） */
-  const scrollToToday = useCallback(() => {
-    const row = todayRowRef.current;
-    const wrapper = wrapperRef.current;
-    if (!row || !wrapper) return;
-    // 用 offsetTop 相对滚动容器计算目标位置，居中显示
-    const rowTop = row.offsetTop - wrapper.offsetTop;
-    wrapper.scrollTo({
-      top: rowTop - wrapper.clientHeight / 2 + row.offsetHeight / 2,
-      behavior: 'smooth',
-    });
-  }, []);
-
-  // 加载矩阵数据（历史全部）
   const loadMatrix = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -135,7 +117,7 @@ export function SectorEffectPage() {
     }
   }, []);
 
-  // 手动刷新（抓取最新数据并保留历史）
+  // 手动刷新
   const handleRefresh = async () => {
     setRefreshing(true);
     setError(null);
@@ -143,7 +125,6 @@ export function SectorEffectPage() {
       const body: Record<string, string> = {};
       const raw = date.trim().replace(/-/g, '');
       if (raw && /^\d{8}$/.test(raw)) body.date = raw;
-
       const resp = await fetch('/api/sector-effect/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -151,14 +132,11 @@ export function SectorEffectPage() {
       });
       const json = await resp.json();
       if (!resp.ok || !json.success) throw new Error(json?.error || '更新失败');
-
       if (json.skipped) {
         MessagePlugin.warning(json.message || `${json.date} 已有模板历史数据，已保留未覆盖`);
       } else {
         MessagePlugin.success(`已更新 ${json.date} 数据：${json.totalLimitUp}只涨停，${json.sectorCount}个板块`);
       }
-
-      // 刷新矩阵视图
       await loadMatrix();
     } catch (err: any) {
       setError(err?.message || '更新失败');
@@ -168,8 +146,7 @@ export function SectorEffectPage() {
     }
   };
 
-  // 导入内置历史基线（2026 腾讯文档模板）
-  // force=true 时用模板数据覆盖同日期已有记录；默认只补齐缺失日期
+  // 导入历史
   const handleImportHistory = async (force: boolean = false) => {
     setImporting(true);
     setError(null);
@@ -214,34 +191,168 @@ export function SectorEffectPage() {
     }
   };
 
+  useEffect(() => { loadMatrix(); }, [loadMatrix]);
+
+  // ============= 滚动控制 =============
+
+  /** 跳到今天所在行（手动 offset 计算，避免 sticky 表格中 scrollIntoView 失效） */
+  const scrollToToday = useCallback(() => {
+    const row = todayRowRef.current;
+    const wrapper = wrapperRef.current;
+    if (!row || !wrapper) return;
+    const rowTop = row.offsetTop - (wrapper.offsetTop || 0);
+    wrapper.scrollTo({
+      top: rowTop - wrapper.clientHeight / 2 + row.offsetHeight / 2,
+      behavior: 'smooth',
+    });
+  }, []);
+
+  const scrollToTop = useCallback(() => {
+    wrapperRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
+
+  // 打开时自动滚动到今天（延迟等 DOM 渲染完成）
   useEffect(() => {
-    loadMatrix();
-  }, [loadMatrix]);
+    if (data?.mode !== 'matrix' || !data.rows?.length) return;
+    const t = setTimeout(() => scrollToToday(), 200);
+    return () => clearTimeout(t);
+  }, [data, scrollToToday]);
 
-  /**
-   * 安全计算列数。
-   * 关键：单日查询模式（mode='single'）下后端只返回 sectors、不返回 columns，
-   * 早期版本在这里直接取 data.columns.length 会抛 TypeError 导致整页白屏。
-   */
-  const colCount = Math.max(
-    data?.columns?.length ?? 0,
-    data?.sectors?.length ?? 0,
-    11,
-  );
+  // ============= 计算属性 =============
 
-  /** 来源统计：区分「腾讯文档模板历史」与「东财实时抓取」两种口径 */
+  const colCount = Math.max(data?.columns?.length ?? 0, data?.sectors?.length ?? 0, 11);
+
   const historyCount = data?.rows?.filter(r => r.source?.includes('腾讯文档')).length ?? 0;
   const liveCount = (data?.rows?.length ?? 0) - historyCount;
 
-  /** 渲染单个单元格 */
-  const renderCell = (cell: SectorCell | null, colIndex: number, rowIndex: number) => {
-    if (!cell) return <td key={colIndex} className="sector-cell empty" />;
+  /**
+   * 增强行数据：添加月份分隔标记和折叠信息。
+   * 返回数组元素类型：实际数据行 | 月份标题行 | 省略折叠行
+   */
+  const displayRows = useMemo(() => {
+    if (!data?.rows || data.mode !== 'matrix') return [];
 
-    // 根据列位置决定背景色（前3列红色系，中间蓝色系，其余灰色）
+    const result: Array<{ type: 'data'; row: MatrixRow; index: number }
+                    | { type: 'month'; month: number; note: string }
+                    | { type: 'collapse'; startIdx: number; endIdx: number; count: number; dayType: DayType; startDate: string; endDate: string }> = [];
+
+    let currentMonth = 0;
+    let collapseStart = -1;
+    let collapseType: DayType | null = null;
+
+    for (let i = 0; i < data.rows.length; i++) {
+      const row = data.rows[i];
+      const m = monthOf(row.date);
+
+      // 月份变化 → 插入月份标题
+      if (m !== currentMonth) {
+        // 先关闭上一个折叠段
+        if (collapseStart >= 0 && collapseType && i - collapseStart >= COLLAPSE_THRESHOLD) {
+          result.push({
+            type: 'collapse',
+            startIdx: collapseStart,
+            endIdx: i - 1,
+            count: i - collapseStart,
+            dayType: collapseType,
+            startDate: data.rows[collapseStart].date,
+            endDate: data.rows[i - 1].date,
+          });
+        } else if (collapseStart >= 0) {
+          // 不够折叠阈值，补回原始行
+          for (let j = collapseStart; j < i; j++) {
+            result.push({ type: 'data', row: data.rows[j], index: j });
+          }
+        }
+        collapseStart = -1;
+        collapseType = null;
+
+        result.push({ type: 'month', month: m, note: MONTH_NOTES[m] || '' });
+        currentMonth = m;
+      }
+
+      // 交易日 → 直接输出
+      if (row.dayType === 'trading') {
+        // 关闭之前的折叠段
+        if (collapseStart >= 0 && collapseType) {
+          if (i - collapseStart >= COLLAPSE_THRESHOLD) {
+            result.push({
+              type: 'collapse',
+              startIdx: collapseStart,
+              endIdx: i - 1,
+              count: i - collapseStart,
+              dayType: collapseType,
+              startDate: data.rows[collapseStart].date,
+              endDate: data.rows[i - 1].date,
+            });
+          } else {
+            for (let j = collapseStart; j < i; j++) {
+              result.push({ type: 'data', row: data.rows[j], index: j });
+            }
+          }
+          collapseStart = -1;
+          collapseType = null;
+        }
+        result.push({ type: 'data', row, index: i });
+      } else {
+        // 休市日 → 开始或延续折叠
+        if (collapseStart < 0) {
+          collapseStart = i;
+          collapseType = row.dayType;
+        }
+        // 如果休市日类型变了（如周末→节假日），也关闭当前折叠段
+        else if (collapseType !== row.dayType) {
+          if (i - collapseStart >= COLLAPSE_THRESHOLD) {
+            result.push({
+              type: 'collapse',
+              startIdx: collapseStart,
+              endIdx: i - 1,
+              count: i - collapseStart,
+              dayType: collapseType!,
+              startDate: data.rows[collapseStart].date,
+              endDate: data.rows[i - 1].date,
+            });
+          } else {
+            for (let j = collapseStart; j < i; j++) {
+              result.push({ type: 'data', row: data.rows[j], index: j });
+            }
+          }
+          collapseStart = i;
+          collapseType = row.dayType;
+        }
+        // 否则继续累积到当前折叠段
+      }
+    }
+
+    // 处理末尾的折叠段
+    if (collapseStart >= 0 && collapseType) {
+      const remaining = data.rows.length - collapseStart;
+      if (remaining >= COLLAPSE_THRESHOLD) {
+        result.push({
+          type: 'collapse',
+          startIdx: collapseStart,
+          endIdx: data.rows.length - 1,
+          count: remaining,
+          dayType: collapseType,
+          startDate: data.rows[collapseStart].date,
+          endDate: data.rows[data.rows.length - 1].date,
+        });
+      } else {
+        for (let j = collapseStart; j < data.rows.length; j++) {
+          result.push({ type: 'data', row: data.rows[j], index: j });
+        }
+      }
+    }
+
+    return result;
+  }, [data?.rows, data?.mode]);
+
+  // ============= 渲染辅助函数 =============
+
+  const renderCell = (cell: SectorCell | null, colIndex: number) => {
+    if (!cell) return <td key={colIndex} className="sector-cell empty" />;
     let bgStyle = CELL_BG_NORMAL;
     if (colIndex < 3) bgStyle = CELL_BG_TOP;
     else if (colIndex < 7) bgStyle = CELL_BG_MID;
-
     return (
       <td key={colIndex} className="sector-cell" style={{ backgroundColor: bgStyle }}>
         <Tooltip content={`${cell.name}: ${cell.count}只涨停`}>
@@ -250,6 +361,10 @@ export function SectorEffectPage() {
       </td>
     );
   };
+
+  // ============= 主渲染（带错误边界） =============
+
+  try {
 
   // ============= 渲染 =============
   return (
@@ -278,49 +393,16 @@ export function SectorEffectPage() {
             onEnter={handleQuery}
             clearable
           />
-          <Button
-            size="large"
-            theme="primary"
-            icon={<Search size={16} />}
-            loading={loading}
-            disabled={loading}
-            onClick={handleQuery}
-          >
-            查询
-          </Button>
-          <Button
-            size="large"
-            icon={<RefreshCw size={16} />}
-            loading={refreshing}
-            disabled={refreshing || loading}
-            onClick={handleRefresh}
-          >
+          <Button size="large" theme="primary" icon={<Search size={16} />} loading={loading} disabled={loading} onClick={handleQuery}>查询</Button>
+          <Button size="large" icon={<RefreshCw size={16} />} loading={refreshing} disabled={refreshing || loading} onClick={handleRefresh}>
             {refreshing ? '更新中...' : '手动更新'}
           </Button>
-          <Button
-            size="large"
-            variant="outline"
-            icon={<Database size={16} />}
-            disabled={loading}
-            onClick={loadMatrix}
-          >
-            查看全部
-          </Button>
+          <Button size="large" variant="outline" icon={<Database size={16} />} disabled={loading} onClick={loadMatrix}>查看全部</Button>
           <Tooltip content="导入 2026 年腾讯文档模板历史数据（仅补齐缺失日期，不覆盖已有记录）">
-            <Button
-              size="large"
-              variant="outline"
-              icon={<History size={16} />}
-              loading={importing}
-              disabled={importing || loading}
-              onClick={() => handleImportHistory(false)}
-            >
-              导入历史
-            </Button>
+            <Button size="large" variant="outline" icon={<History size={16} />} loading={importing} disabled={importing || loading} onClick={() => handleImportHistory(false)}>导入历史</Button>
           </Tooltip>
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--td-text-color-placeholder)' }}>
-            <Clock size={14} />
-            <span>交易日 08:00 自动更新</span>
+            <Clock size={14} /><span>交易日 08:00 自动更新</span>
           </div>
         </div>
       </Card>
@@ -340,195 +422,172 @@ export function SectorEffectPage() {
         </Card>
       )}
 
-      {/* 矩阵表格 */}
-      {data && data.mode === 'matrix' && (
-        <>
-          {data.rows.length === 0 ? (
-            <Card bordered>
-              <div style={{ padding: '48px 0', textAlign: 'center' }}>
-                <Database size={40} style={{ margin: '0 auto 12px', color: 'var(--td-text-color-placeholder)' }} />
-                <p style={{ fontSize: 14, color: 'var(--td-text-color-secondary)' }}>{data.note || '暂无数据'}</p>
-                <Button theme="primary" icon={<RefreshCw size={16} />} onClick={handleRefresh} style={{ marginTop: 12 }}>
-                  获取最新数据
-                </Button>
+      {/* ====== 矩阵表格（核心内容）====== */}
+      {data && data.mode === 'matrix' && data.rows.length > 0 && (
+        <Card bordered style={{ overflow: 'visible' }}>
+          {/* 统计栏 + 图例 + 按钮 */}
+          <div style={{ marginBottom: 10 }}>
+            {/* 第一行：统计数据 */}
+            <div style={{ fontSize: 13, color: 'var(--td-text-color-secondary)', display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', marginBottom: 6 }}>
+              <span style={{ fontWeight: 600, color: 'var(--td-text-color-primary)' }}>板块效应</span>
+              <span>共 <strong>{data.totalDates}</strong> 天</span>
+              <span>·</span>
+              <span>交易日 <strong>{data.stats?.trading ?? 0}</strong></span>
+              <span>·</span>
+              <span>周末休市 <strong>{data.stats?.weekend ?? 0}</strong></span>
+              <span>·</span>
+              <span>节假日 <strong>{data.stats?.holiday ?? 0}</strong></span>
+              <span>·</span>
+              <span>今日 <strong>{data.stats?.today ?? 0}</strong></span>
+              <div style={{ display: 'flex', gap: 6, marginLeft: 8 }}>
+                <Button size="small" variant="outline" onClick={scrollToTop}>回到顶部</Button>
+                <Button size="small" variant="outline" onClick={scrollToToday}>跳到今天</Button>
               </div>
-            </Card>
-          ) : (
-            <Card bordered style={{ overflow: 'auto' }}>
-              <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-                <div style={{ fontSize: 13, color: 'var(--td-text-color-secondary)', display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
-                  <span>共 <strong style={{ color: 'var(--td-text-color-primary)' }}>{data.totalDates}</strong> 天</span>
-                  <span>&nbsp;·&nbsp;</span>
-                  <span>交易日 <strong style={{ color: 'var(--td-text-color-primary)' }}>{data.stats?.trading ?? 0}</strong></span>
-                  <span>&nbsp;·&nbsp;</span>
-                  <span>周末休市 <strong style={{ color: 'var(--td-text-color-primary)' }}>{data.stats?.weekend ?? 0}</strong></span>
-                  <span>&nbsp;·&nbsp;</span>
-                  <span>节假日 <strong style={{ color: 'var(--td-text-color-primary)' }}>{data.stats?.holiday ?? 0}</strong></span>
-                  <span>&nbsp;·&nbsp;</span>
-                  <span><strong style={{ color: 'var(--td-text-color-primary)' }}>{data.maxCols}</strong> 个板块列</span>
-                  {historyCount > 0 && (
-                    <>
-                      <span>&nbsp;·&nbsp;</span>
-                      <span>模板历史 <strong style={{ color: 'var(--td-text-color-primary)' }}>{historyCount}</strong> 天</span>
-                    </>
-                  )}
-                  {liveCount > 0 && (
-                    <>
-                      <span>&nbsp;·&nbsp;</span>
-                      <span>实时抓取 <strong style={{ color: UP_COLOR }}>{liveCount}</strong> 天</span>
-                    </>
-                  )}
-                  <div style={{ display: 'flex', gap: 6, marginLeft: 8 }}>
-                    <Button size="small" variant="outline" onClick={scrollToTop}>
-                      回到顶部
-                    </Button>
-                    <Button size="small" variant="outline" onClick={scrollToToday}>
-                      跳到今天
-                    </Button>
-                  </div>
-                </div>
-                {data.generatedAt && (
-                  <div style={{ fontSize: 12, color: 'var(--td-text-color-placeholder)' }}>
-                    更新于 {new Date(data.generatedAt).toLocaleString('zh-CN')}
-                  </div>
-                )}
-              </div>
-
-              <div className="matrix-table-wrapper" ref={wrapperRef}>
-                <table className="matrix-table">
-                  <thead>
-                    <tr>
-                      <th className="col-date">时间</th>
-                      {data.columns.map((col, i) => (
-                        <th key={i} className={`col-sector ${i < 3 ? 'col-top' : i < 7 ? 'col-mid' : ''}`}>
-                          {col}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.rows.map((row, ri) => {
-                      const restStyle = DAY_TYPE_STYLE[row.dayType];
-
-                      // 休市日：整行跨列显示状态文案，保持日期轴连续
-                      if (restStyle) {
-                        return (
-                          <tr key={row.dateToken} ref={row.isToday ? todayRowRef : undefined}>
-                            <td className="cell-date" style={{ backgroundColor: restStyle.bg }}>
-                              <span className="date-text" style={{ color: restStyle.fg }}>
-                                {row.date}
-                              </span>
-                              <span className="date-week" style={{ color: restStyle.fg }}>
-                                {weekdayOf(row.date)}
-                              </span>
-                            </td>
-                            <td
-                              className="rest-cell"
-                              colSpan={data.maxCols}
-                              style={{ backgroundColor: restStyle.bg, color: restStyle.fg }}
-                            >
-                              {restStyle.label}
-                              {row.dayType === 'today' && ' · 交易日 08:00 自动更新'}
-                            </td>
-                          </tr>
-                        );
-                      }
-
-                      // 交易日：正常渲染各板块单元格
-                      return (
-                        <tr key={row.dateToken} ref={row.isToday ? todayRowRef : undefined}>
-                          <td className="cell-date">
-                            <Tooltip content={`来源：${row.source || '未知'}`}>
-                              <span
-                                className="src-dot"
-                                style={{ backgroundColor: row.source?.includes('腾讯文档') ? '#bfbfbf' : UP_COLOR }}
-                              />
-                            </Tooltip>
-                            <span className="date-text">{row.date}</span>
-                            <span className="date-week">{weekdayOf(row.date)}</span>
-                            {row.substitutedDate && (
-                              <Tooltip content={`实际数据日期: ${row.substitutedDate}`}>
-                                <span className="date-subst">※</span>
-                              </Tooltip>
-                            )}
-                          </td>
-                          {row.cells.map((cell, ci) => renderCell(cell, ci, ri))}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              {data.note && (
-                <div
-                  style={{
-                    marginTop: 16,
-                    paddingTop: 12,
-                    borderTop: '1px solid var(--td-component-stroke)',
-                    fontSize: 12,
-                    lineHeight: 1.8,
-                    color: 'var(--td-text-color-placeholder)'
-                  }}
-                >
-                  <div>{data.note}</div>
-                  <div style={{ marginTop: 4 }}>以上内容基于公开行情数据统计，仅供研究参考，不构成投资建议。市场有风险，投资需谨慎。</div>
-                </div>
-              )}
-            </Card>
-          )}
-        </>
-      )}
-
-      {/* 单日查询结果回退展示 */}
-      {data && data.mode === 'single' && (
-        <Card bordered>
-          <div style={{ marginBottom: 12, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-            <div>
-              <div style={{ fontSize: 11, color: 'var(--td-text-color-placeholder)' }}>统计日期</div>
-              <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--td-text-color-primary)' }}>{data.date}</div>
             </div>
-            <div>
-              <div style={{ fontSize: 11, color: 'var(--td-text-color-placeholder)' }}>涨停总数</div>
-              <div style={{ fontSize: 16, fontWeight: 600, color: UP_COLOR }}>{data.totalLimitUp ?? 0} 只</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 11, color: 'var(--td-text-color-placeholder)' }}>涉及板块</div>
-              <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--td-text-color-primary)' }}>{data.sectors?.length ?? 0} 个</div>
+            {/* 第二行：颜色图例 */}
+            <div style={{ fontSize: 12, color: 'var(--td-text-color-placeholder)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 12, height: 12, borderRadius: 2, backgroundColor: '#fff1f0', border: '1px solid #ffccc7' }} /> 榜首板块
+              </span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 12, height: 12, borderRadius: 2, backgroundColor: '#f0f5ff', border: '1px solid #d6e4ff' }} /> 中列板块
+              </span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 12, height: 12, borderRadius: 2, backgroundColor: '#f5f5f5', border: '1px solid #e7e7e7' }} /> 周末休市
+              </span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 12, height: 12, borderRadius: 2, backgroundColor: '#fff7e6', border: '1px solid #ffe7ba' }} /> 节假日休市
+              </span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 12, height: 12, borderRadius: 2, backgroundColor: '#f9f0ff', border: '1px solid #d3adf7' }} /> 今日待更新
+              </span>
             </div>
           </div>
 
-          {data.substitutedDate && (
-            <Alert theme="warning" message={`${data.requestedDate} 无有效收盘数据，已改用 ${data.substitutedDate}`} style={{ marginBottom: 12 }} />
-          )}
+          {/* 表格容器 */}
+          <div className="matrix-table-wrapper" ref={wrapperRef}>
+            <table className="matrix-table">
+              <thead>
+                <tr>
+                  <th className="col-date">时间</th>
+                  {data.columns.slice(0, Math.min(data.maxCols, 11)).map((col, i) => (
+                    <th key={i} className={`col-sector ${i < 3 ? 'col-top' : i < 7 ? 'col-mid' : ''}`}>{col}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {displayRows.map((item, di) => {
+                  // ---- 月份标题行 ----
+                  if (item.type === 'month') {
+                    return (
+                      <tr key={`m-${item.month}`} className="month-header-row">
+                        <td colSpan={Math.min(data.maxCols, 11) + 1} className="month-header-cell">
+                          <strong>{item.month} 月</strong>
+                          {item.note && <span className="month-note"> · {item.note}</span>}
+                        </td>
+                      </tr>
+                    );
+                  }
 
-          {/* 无板块数据时给出明确说明，而不是渲染一张空表 */}
+                  // ---- 折叠省略行 ----
+                  if (item.type === 'collapse') {
+                    const cs = DAY_TYPE_STYLE[item.dayType];
+                    return (
+                      <tr key={`c-${item.startIdx}`} className="collapse-row">
+                        <td colSpan={Math.min(data.maxCols, 11) + 1}
+                          className="collapse-cell"
+                          style={{ backgroundColor: cs?.bg || '#f5f5f5', color: cs?.fg || '#8c8c8c' }}>
+                          … 省略 {item.startDate.replace(/\//g, '/')} – {item.endDate.replace(/\//g, '/')} 共 <strong>{item.count}</strong> 天 …
+                        </td>
+                      </tr>
+                    );
+                  }
+
+                  // ---- 实际数据行 ----
+                  const row = item.row;
+                  const restStyle = DAY_TYPE_STYLE[row.dayType];
+
+                  // 休市日未折叠 → 正常显示
+                  if (restStyle) {
+                    return (
+                      <tr key={row.dateToken} ref={row.isToday ? todayRowRef : undefined}>
+                        <td className="cell-date" style={{ backgroundColor: restStyle.bg }}>
+                          <span className="date-text" style={{ color: restStyle.fg }}>{row.date}</span>
+                          <span className="date-week" style={{ color: restStyle.fg }}>{weekdayOf(row.date)}</span>
+                        </td>
+                        <td className="rest-cell" colSpan={Math.min(data.maxCols, 11)}
+                          style={{ backgroundColor: restStyle.bg, color: restStyle.fg }}>
+                          {restStyle.label}
+                          {row.dayType === 'today' && ' · 交易日 08:00 自动更新'}
+                        </td>
+                      </tr>
+                    );
+                  }
+
+                  // 交易日
+                  return (
+                    <tr key={row.dateToken} ref={row.isToday ? todayRowRef : undefined}>
+                      <td className="cell-date">
+                        <Tooltip content={`来源：${row.source || '未知'}`}>
+                          <span className="src-dot" style={{ backgroundColor: row.source?.includes('腾讯文档') ? '#bfbfbf' : UP_COLOR }} />
+                        </Tooltip>
+                        <span className="date-text">{row.date}</span>
+                        <span className="date-week">{weekdayOf(row.date)}</span>
+                        {row.substitutedDate && (
+                          <Tooltip content={`实际数据日期: ${row.substitutedDate}`}>
+                            <span className="date-subst">※</span>
+                          </Tooltip>
+                        )}
+                      </td>
+                      {row.cells.slice(0, Math.min(data.maxCols, 11)).map((cell, ci) => renderCell(cell, ci))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 底部说明 */}
+          {data.note && (
+            <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--td-component-stroke)', fontSize: 12, lineHeight: 1.8, color: 'var(--td-text-color-placeholder)' }}>
+              <div>{data.note}</div>
+              <div style={{ marginTop: 4 }}>以上内容基于公开行情数据统计，仅供研究参考，不构成投资建议。市场有风险，投资需谨慎。</div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* 无数据空状态 */}
+      {data && data.mode === 'matrix' && data.rows.length === 0 && (
+        <Card bordered>
+          <div style={{ padding: '48px 0', textAlign: 'center' }}>
+            <Database size={40} style={{ margin: '0 auto 12px', color: 'var(--td-text-color-placeholder)' }} />
+            <p style={{ fontSize: 14, color: 'var(--td-text-color-secondary)' }}>{data.note || '暂无数据'}</p>
+            <Button theme="primary" icon={<RefreshCw size={16} />} onClick={handleRefresh} style={{ marginTop: 12 }}>获取最新数据</Button>
+          </div>
+        </Card>
+      )}
+
+      {/* 单日查询回退展示 */}
+      {data && data.mode === 'single' && (
+        <Card bordered>
+          <div style={{ marginBottom: 12, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            <div><div style={{ fontSize: 11, color: 'var(--td-text-color-placeholder)' }}>统计日期</div><div style={{ fontSize: 16, fontWeight: 600 }}>{data.date}</div></div>
+            <div><div style={{ fontSize: 11, color: 'var(--td-text-color-placeholder)' }}>涨停总数</div><div style={{ fontSize: 16, fontWeight: 600, color: UP_COLOR }}>{data.totalLimitUp ?? 0} 只</div></div>
+            <div><div style={{ fontSize: 11, color: 'var(--td-text-color-placeholder)' }}>涉及板块</div><div style={{ fontSize: 16, fontWeight: 600 }}>{data.sectors?.length ?? 0} 个</div></div>
+          </div>
+          {data.substitutedDate && <Alert theme="warning" message={`${data.requestedDate} 无有效收盘数据，已改用 ${data.substitutedDate}`} style={{ marginBottom: 12 }} />}
           {(!data.sectors || data.sectors.length === 0) ? (
             <Alert theme="info" message={data.note || '该日期暂无有效涨停数据'} style={{ marginBottom: 12 }} />
           ) : (
             <div className="matrix-table-wrapper">
               <table className="matrix-table">
-                <thead>
-                  <tr>
-                    <th className="col-date">时间</th>
-                    {data.sectors.slice(0, 17).map((sec, i) => (
-                      <th key={i} className={`col-sector ${i < 3 ? 'col-top' : i < 7 ? 'col-mid' : ''}`}>板块{i + 1}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td className="cell-date"><span className="date-text">{String(data.date ?? '').replace(/(\d{4})(\d{2})(\d{2})/, '$1/$2/$3')}</span></td>
-                    {data.sectors.slice(0, 17).map((sec, i) => renderCell(sec, i, 0))}
-                  </tr>
-                </tbody>
+                <thead><tr><th className="col-date">时间</th>{data.sectors!.slice(0, 17).map((_, i) => <th key={i} className={`col-sector ${i < 3 ? 'col-top' : i < 7 ? 'col-mid' : ''}`}>板块{i + 1}</th>)}</tr></thead>
+                <tbody><tr><td className="cell-date"><span className="date-text">{String(data.date ?? '').replace(/(\d{4})(\d{2})(\d{2})/, '$1/$2/$3')}</span></td>{data.sectors!.slice(0, 17).map((sec, i) => renderCell(sec, i))}</tr></tbody>
               </table>
             </div>
           )}
-
-          <Button variant="outline" icon={<Database size={16} />} onClick={loadMatrix} style={{ marginTop: 12 }}>
-            查看全部历史数据
-          </Button>
+          <Button variant="outline" icon={<Database size={16} />} onClick={loadMatrix} style={{ marginTop: 12 }}>查看全部历史数据</Button>
         </Card>
       )}
 
@@ -537,7 +596,6 @@ export function SectorEffectPage() {
         .matrix-table-wrapper {
           overflow: auto;
           -webkit-overflow-scrolling: touch;
-          /* 历史数据可达数百行，限制视口高度并双向冻结表头/首列，避免整页被撑得过长 */
           max-height: 72vh;
         }
 
@@ -562,7 +620,6 @@ export function SectorEffectPage() {
           white-space: nowrap;
         }
 
-        /* 表头左上角单元格需同时冻结行列，z-index 必须高于普通表头(10)和首列(5) */
         .matrix-table thead th.col-date {
           background: var(--td-brand-color-light, #e6f7ff);
           min-width: 90px;
@@ -573,19 +630,10 @@ export function SectorEffectPage() {
           z-index: 15;
         }
 
-        .matrix-table thead th.col-top {
-          background: #fff1f0;
-          color: #cf1322;
-        }
+        .matrix-table thead th.col-top { background: #fff1f0; color: #cf1322; }
+        .matrix-table thead th.col-mid { background: #f0f5ff; color: #2f54eb; }
 
-        .matrix-table thead th.col-mid {
-          background: #f0f5ff;
-          color: #2f54eb;
-        }
-
-        .matrix-table tbody tr:hover {
-          background: var(--td-bg-color-container-hover, #fafafa);
-        }
+        .matrix-table tbody tr:hover { background: var(--td-bg-color-container-hover, #fafafa); }
 
         .matrix-table td {
           border: 1px solid var(--td-component-stroke, #e7e7e7);
@@ -597,9 +645,7 @@ export function SectorEffectPage() {
           white-space: nowrap;
         }
 
-        .matrix-table td.sector-cell.empty {
-          background: #fafafa !important;
-        }
+        .matrix-table td.sector-cell.empty { background: #fafafa !important; }
 
         .matrix-table td.cell-date {
           background: var(--td-brand-color-light, #e6f7ff);
@@ -611,86 +657,61 @@ export function SectorEffectPage() {
           width: 90px;
         }
 
-        .matrix-table .date-text {
-          font-size: 12px;
+        .matrix-table .date-text { font-size: 12px; color: var(--td-text-color-primary, #333); font-variant-numeric: tabular-nums; }
+        .matrix-table .date-week { font-size: 10px; margin-left: 4px; opacity: 0.7; }
+        .matrix-table td.rest-cell { text-align: center; font-size: 12px; letter-spacing: 0.5px; height: 30px; }
+        .matrix-table .src-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; margin-right: 4px; vertical-align: middle; flex-shrink: 0; }
+        .matrix-table .date-subst { font-size: 10px; color: var(--td-warning-color, #e37318); cursor: help; margin-left: 2px; }
+        .matrix-table .cell-text { font-size: 12.5px; font-weight: 500; cursor: default; display: inline-block; padding: 2px 8px; border-radius: 3px; line-height: 1.6; transition: transform 0.15s ease; }
+        .matrix-table .cell-text:hover { transform: scale(1.06); }
+
+        /* 月份标题行 */
+        .matrix-table .month-header-row td {
+          background: linear-gradient(90deg, #fafafa 0%, #f0f0f0 100%);
+          border: none;
+          border-bottom: 2px solid var(--td-component-stroke, #e7e7e7);
+          padding: 6px 12px;
+          text-align: left;
+          font-size: 13px;
+          height: auto;
           color: var(--td-text-color-primary, #333);
-          font-variant-numeric: tabular-nums;
+        }
+        .matrix-table .month-note {
+          font-weight: 400;
+          color: var(--td-text-color-secondary, #666);
+          font-size: 12px;
         }
 
-        /* 星期，作为日期的辅助信息弱化处理 */
-        .matrix-table .date-week {
-          font-size: 10px;
-          margin-left: 4px;
-          opacity: 0.7;
-        }
-
-        /* 休市日跨列单元格：整行居中显示休市原因 */
-        .matrix-table td.rest-cell {
+        /* 折叠省略行 */
+        .matrix-table .collapse-row td {
           text-align: center;
           font-size: 12px;
-          letter-spacing: 0.5px;
-          height: 30px;
+          letter-spacing: 0.3px;
+          height: 28px;
+          cursor: pointer;
         }
-
-        /* 来源圆点：灰=腾讯文档模板历史，红=东财实时抓取 */
-        .matrix-table .src-dot {
-          display: inline-block;
-          width: 5px;
-          height: 5px;
-          border-radius: 50%;
-          margin-right: 4px;
-          vertical-align: middle;
-          flex-shrink: 0;
-        }
-
-        .matrix-table .date-subst {
-          font-size: 10px;
-          color: var(--td-warning-color, #e37318);
-          cursor: help;
-          margin-left: 2px;
-        }
-
-        .matrix-table .cell-text {
-          font-size: 12.5px;
-          font-weight: 500;
-          cursor: default;
-          display: inline-block;
-          padding: 2px 8px;
-          border-radius: 3px;
-          line-height: 1.6;
-          transition: transform 0.15s ease;
-        }
-
-        .matrix-table .cell-text:hover {
-          transform: scale(1.06);
-        }
-
-        /* 涨停数字用红色强调 */
-        .matrix-table .cell-text::after {
-          content: attr(data-count);
-          display: none;
+        .matrix-table .collapse-row:hover td {
+          opacity: 0.85;
         }
 
         @media (max-width: 768px) {
-          .matrix-table {
-            font-size: 11px;
-            min-width: max(100%, ${colCount * 80 + 90}px);
-          }
-          .matrix-table td {
-            min-width: 70px;
-            padding: 2px 2px;
-            height: 28px;
-          }
-          .matrix-table .cell-text {
-            font-size: 11px;
-            padding: 1px 4px;
-          }
-          .matrix-table td.cell-date {
-            min-width: 70px;
-            width: 70px;
-          }
+          .matrix-table { font-size: 11px; min-width: max(100%, ${colCount * 80 + 90}px); }
+          .matrix-table td { min-width: 70px; padding: 2px 2px; height: 28px; }
+          .matrix-table .cell-text { font-size: 11px; padding: 1px 4px; }
+          .matrix-table td.cell-date { min-width: 70px; width: 70px; }
         }
       `}</style>
     </div>
   );
+
+  } catch (err: any) {
+    // 渲染级错误兜底：防止整页白屏
+    if (!renderError) setRenderError(err?.message || String(err));
+    return (
+      <div style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
+        <Alert theme="error" message={`页面渲染异常：${err?.message || '未知错误'}`} style={{ marginBottom: 16 }} />
+        <Button theme="primary" onClick={() => { setData(null); setRenderError(null); }}>重试加载</Button>
+      </div>
+    );
+  }
 }
