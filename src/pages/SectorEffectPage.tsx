@@ -93,27 +93,30 @@ export function SectorEffectPage() {
 
   // 表格为正序（最早日期在顶部），打开时自动滚动定位到今天，
   // 免得每次都要手动翻几百行才能看到最新数据。
+  // 使用手动 offset 计算而非 scrollIntoView，避免 sticky 表头/首列干扰。
   useEffect(() => {
     if (data?.mode !== 'matrix' || !data.rows?.length) return;
-    const timer = setTimeout(() => {
-      const row = todayRowRef.current;
-      if (row && wrapperRef.current) {
-        row.scrollIntoView({ block: 'center', behavior: 'auto' });
-      }
-    }, 120);
+    const timer = setTimeout(() => scrollToToday(), 150);
     return () => clearTimeout(timer);
-  }, [data]);
+  }, [data, scrollToToday]);
 
   /** 回到表格顶部（最早日期） */
   const scrollToTop = () => {
     wrapperRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  /** 跳到今天所在行 */
-  const scrollToToday = () => {
+  /** 跳到今天所在行（手动计算偏移量，避免 scrollIntoView 在 sticky 表格中失效） */
+  const scrollToToday = useCallback(() => {
     const row = todayRowRef.current;
-    if (row) row.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  };
+    const wrapper = wrapperRef.current;
+    if (!row || !wrapper) return;
+    // 用 offsetTop 相对滚动容器计算目标位置，居中显示
+    const rowTop = row.offsetTop - wrapper.offsetTop;
+    wrapper.scrollTo({
+      top: rowTop - wrapper.clientHeight / 2 + row.offsetHeight / 2,
+      behavior: 'smooth',
+    });
+  }, []);
 
   // 加载矩阵数据（历史全部）
   const loadMatrix = useCallback(async () => {

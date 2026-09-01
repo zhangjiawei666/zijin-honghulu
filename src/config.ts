@@ -14,7 +14,7 @@ export const APP_CONFIG = {
   description: '监控自选股行情，发现买点自动提醒',
 
   /** 版本号（桌面主线：v1.0.10 之后进阶为 v1.1.01，依次为 v1.1.02…） */
-  version: '1.1.06',
+  version: '1.1.07',
 };
 
 export default APP_CONFIG;

@@ -421,21 +421,29 @@ function importBuiltinHistory(force = false): { added: number; updated: number; 
   return { added, updated, total: SECTOR_EFFECT_HISTORY.length };
 }
 
-/** 首次启动且本地无板块效应数据时，自动补齐内置历史 */
+/** 首次启动时自动补齐内置历史（含周末/节假日完整日期轴）。
+ *
+ * 关键变更：每次启动都执行补齐（而非"有数据就跳过"）。
+ * 原因：v1.1.04 只导入了 167 个交易日，v1.1.06 新增了 240 天完整轴
+ * （含 ~62 个周末 + ~10 个法定节假日），若检测到旧数据就跳过，
+ * 则新增的休市日行永远无法入库。
+ *
+ * 安全性：importBuiltinHistory(false) 内部对已存在的日期执行 continue（不覆盖），
+ * 因此重复调用只会补齐缺失的周末/节假日行，不会影响已有交易日数据。
+ */
 function ensureHistorySeeded(): void {
   try {
-    const existing = db.getSectorEffectAll(1);
-    if (existing.length > 0) {
-      console.log("[SectorEffect] 本地已有板块效应数据，跳过历史基线导入");
-      return;
-    }
     const r = importBuiltinHistory(false);
-    const trading = SECTOR_EFFECT_HISTORY.filter(x => x.day_type === 'trading').length;
-    const resting = SECTOR_EFFECT_HISTORY.length - trading;
-    console.log(
-      `[SectorEffect] 已导入内置历史基线 ${r.added} 天（模板共 ${r.total} 行：`
-      + `交易日 ${trading} 天、休市日 ${resting} 天）`
-    );
+    if (r.added > 0) {
+      const trading = SECTOR_EFFECT_HISTORY.filter(x => x.day_type === 'trading').length;
+      const resting = SECTOR_EFFECT_HISTORY.length - trading;
+      console.log(
+        `[SectorEffect] 补齐内置历史基线：新增 ${r.added} 天`
+        + `（模板共 ${r.total} 行：交易日 ${trading} 天、休市日 ${resting} 天）`
+      );
+    } else {
+      console.log("[SectorEffect] 内置历史基线已完整，无需补齐");
+    }
   } catch (err: any) {
     console.error("[SectorEffect] 导入历史基线失败:", err?.message || err);
   }
