@@ -673,7 +673,10 @@ ${BUY_RULES}
 
       const parsed = this.extractSignalArray(fullText);
       if (parsed) {
-        return parsed
+        // ---- 后置校验：过滤掉「价格已跌破参考均线」的无效 Agent 信号 ----
+        // Agent（AI 推理）有时会在 reason 中自行标注"不符/不达标/跌破"但仍返回信号，
+        // 必须用实际 K 线数据复核价格与均线位置关系，不合格的直接丢弃。
+        const rawSignals: db.BuySignal[] = parsed
           .filter((s: any) => s && s.code && s.signal_type)
           .map((s: any) => ({
             id: uuidv4(),
@@ -686,6 +689,84 @@ ${BUY_RULES}
             source: "agent",
             created_at: new Date().toISOString(),
           }));
+
+        // 用已取到的 K 线数据构建 code→均线 映射（checkWithAgent 内部已 fetch 过日K）
+        const maMap = new Map<string, { close: number; ma5: number | null; ma10: number | null; ma20: number | null; ma60: number | null }>();
+        for (const item of items) {
+          try {
+            const mc = toMarketCode(item.code);
+            const bars = await fetchDailyKline(mc, 70);
+            if (bars.length < 25) continue;
+            const closes = bars.map(b => b.close);
+            const last = closes.length - 1;
+            maMap.set(item.code, {
+              close: closes[last],
+              ma5: calcMA(closes, 5, last),
+              ma10: calcMA(closes, 10, last),
+              ma20: calcMA(closes, 20, last),
+              ma60: calcMA(closes, 60, last),
+            });
+          } catch { /* 取数失败的股票跳过校验（保留原信号） */ }
+        }
+
+        // 信号类型 → 所需参考均线 + 价格条件
+        const SIGNAL_MA_RULES: Record<string, { maKey: keyof Pick<typeof maMap extends Map<string, infer V> ? V : never, "ma5" | "ma10" | "ma20" | "ma60">; requireAbove: boolean }> = {
+          "短线十五法/买点1": { maKey: "ma10", requireAbove: true },   // 收盘 > MA10
+          "短线十五法/买点2": { maKey: "ma5", requireAbove: true },     // 收盘 > MA5
+          "短线十五法/买点3": { maKey: "ma10", requireAbove: false },   // 收盘 >= MA10（回踩可触及）
+          "中线六二法/买点1": { maKey: "ma20", requireAbove: false },   // 收盘 >= MA20/MA60（回踩）
+          "中线六二法/买点2": { maKey: "ma20", requireAbove: false },   // 均线附近（±4%）
+        };
+
+        const validated = rawSignals.filter((sig) => {
+          // 规则 1：reason 中含「不符」「不达标」「跌破…不符」等否定词 → 直接排除
+          if (/不符|不达标|未达标准|跌破.*不符|不满足/.test(sig.reason)) {
+            console.log(`[Monitor] Agent信号后置校验淘汰(reason含否定词): ${sig.code} ${sig.signal_type} reason="${sig.reason}"`);
+            return false;
+          }
+
+          // 规则 2：用实际 K 线数据验证价格是否在参考均线上方/附近
+          const rule = SIGNAL_MA_RULES[sig.signal_type];
+          if (!rule) return true; // 未知信号类型放行（不应出现）
+
+          const maData = maMap.get(sig.code);
+          if (!maData) return true; // 无 K 线数据则跳过数值校验
+
+          // 中线买点的参考均线可能写在 reason 里（如 MA60），优先从 reason 提取
+          let refMA: number | null = null;
+          const maMatch = sig.reason.match(/参考均线:(MA\d+)/);
+          if (maMatch) {
+            const key = maMatch[1].toLowerCase() as "ma5" | "ma10" | "ma20" | "ma60";
+            refMA = maData[key] ?? null;
+          } else {
+            refMA = maData[rule.maKey];
+          }
+          if (refMA === null) return true;
+
+          const close = sig.price ?? maData.close;
+
+          if (rule.requireAbove) {
+            // 短线买点1/2：必须严格在均线上方（close > MA）
+            if (close <= refMA) {
+              console.log(`[Monitor] Agent信号后置校验淘汰(价≤均线): ${sig.code} ${sig.signal_type} close=${close} refMA=${refMA}`);
+              return false;
+            }
+          } else {
+            // 中线买点1/2、短线买点3：允许接近或回踩（close >= MA * 0.96，即跌幅不超过4%）
+            if (close < refMA * 0.96) {
+              console.log(`[Monitor] Agent信号后置校验淘汰(价远离均线): ${sig.code} ${sig.signal_type} close=${close} refMA=${refMA}`);
+              return false;
+            }
+          }
+
+          return true;
+        });
+
+        if (validated.length !== rawSignals.length) {
+          console.log(`[Monitor] Agent信号后置校验: ${rawSignals.length} → ${validated.length}（淘汰 ${rawSignals.length - validated.length} 个无效信号）`);
+        }
+
+        return validated;
       }
       console.warn(`[Monitor] Agent 第 ${attempt} 次输出不是有效 JSON，重试...`);
     }
