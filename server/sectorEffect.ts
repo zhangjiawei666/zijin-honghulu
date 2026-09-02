@@ -434,92 +434,6 @@ function aggregate(stocks: LimitUpStock[]): Array<{ name: string; count: number 
   return list;
 }
 
-// ============= 列对齐：让同一板块尽量落在同一列 =============
-
-/**
- * 从所有历史行中计算每个板块最常出现的列索引，
- * 返回列位映射表。
- */
-function buildColumnMapping(rows: MatrixRow[]): Map<string, number> {
-  // 统计每个板块在各列位置的出现次数
-  const colFreq = new Map<string, Map<number, number>>();
-  for (const row of rows) {
-    row.sectors.forEach((sec, idx) => {
-      if (!colFreq.has(sec.name)) colFreq.set(sec.name, new Map());
-      colFreq.get(sec.name)!.set(idx, (colFreq.get(sec.name)!.get(idx) || 0) + 1);
-    });
-  }
-
-  // 已分配的列位
-  const assignedCols = new Set<number>();
-  const mapping = new Map<string, number>();
-
-  // 按总出现次数降序排列板块，优先分配高频板块
-  const sectorTotalFreq = new Map<string, number>();
-  for (const [sec, freqs] of colFreq) {
-    let total = 0;
-    for (const c of freqs.values()) total += c;
-    sectorTotalFreq.set(sec, total);
-  }
-  const sortedSectors = [...sectorTotalFreq.entries()].sort((a, b) => b[1] - a[1]);
-
-  for (const [secName] of sortedSectors) {
-    const freqs = colFreq.get(secName)!;
-    // 找该板块出现最多的列位，优先选未占用的
-    let bestCol = -1;
-    let bestFreq = -1;
-    for (const [col, freq] of freqs) {
-      if (!assignedCols.has(col) && freq > bestFreq) {
-        bestCol = col;
-        bestFreq = freq;
-      }
-    }
-    // 如果所有常用列都被占了，选频率最高的那个（允许复用）
-    if (bestCol === -1) {
-      for (const [col, freq] of freqs) {
-        if (freq > bestFreq) {
-          bestCol = col;
-          bestFreq = freq;
-        }
-      }
-    }
-    mapping.set(secName, bestCol);
-    assignedCols.add(bestCol);
-  }
-
-  return mapping;
-}
-
-/** 根据列映射对单行数据进行重排，返回固定长度的数组（空位填 null） */
-function alignRow(
-  sectors: Array<{ name: string; count: number }>,
-  mapping: Map<string, number>,
-  maxCols: number
-): ({ name: string; count: number } | null)[] {
-  const row: ({ name: string; count: number } | null)[] = new Array(maxCols).fill(null);
-  for (const sec of sectors) {
-    const targetCol = mapping.get(sec.name);
-    if (targetCol !== undefined && targetCol < maxCols) {
-      // 如果目标列已被占用（同日同板块合并计数的情况），追加到该位置
-      if (row[targetCol] !== null) {
-        // 合并：同名板块不应出现两次，但以防万一做计数叠加
-        // 正常情况不会走到这里
-        continue;
-      }
-      row[targetCol] = sec;
-    } else {
-      // 找不到映射或超出范围，放入第一个空列
-      for (let i = 0; i < maxCols; i++) {
-        if (row[i] === null) {
-          row[i] = sec;
-          break;
-        }
-      }
-    }
-  }
-  return row;
-}
-
 // ============= 核心：获取并存储某日数据 =============
 
 /**
@@ -1025,18 +939,21 @@ export function registerSectorEffectRoutes(app: express.Express): void {
         };
       });
 
-      // 列对齐：基于全部历史数据计算最优列映射
-      const mapping = buildColumnMapping(matrixRows);
-
-      // 确定最大列数（取所有行中的最大板块数，至少 11 列，至多 MAX_SECTOR_COLS 列）
+      // 列对齐：按腾讯文档模板语义，每行板块数组即「板块1~板块N」的列顺序
+      // （用户在文档里每天按列位手填，并非固定板块名）。因此直接按位置映射，
+      // 保证用户填进去的每一个板块（含农业等低频板块）都能显示，
+      // 不再做"全局按名归并"——那种方式会把出现频率低的板块踢出列集合导致漏展示。
       const maxSectorCount = Math.max(...matrixRows.map(r => r.sectors.length), 11);
       const maxCols = Math.min(maxSectorCount, MAX_SECTOR_COLS);
 
-      // 对齐每行数据
-      const alignedRows = matrixRows.map(row => ({
-        ...row,
-        cells: alignRow(row.sectors, mapping, maxCols),
-      }));
+      // 对齐每行数据：cells[i] = 该行第 i 个板块（文档列位），不足补 null
+      const alignedRows = matrixRows.map(row => {
+        const cells = new Array<{ name: string; count: number } | null>(maxCols).fill(null);
+        for (let i = 0; i < Math.min(row.sectors.length, maxCols); i++) {
+          cells[i] = row.sectors[i];
+        }
+        return { ...row, cells };
+      });
 
       // 生成列标题（板块1~板块N）
       const columns = Array.from({ length: maxCols }, (_, i) => `板块${i + 1}`);
