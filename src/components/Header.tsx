@@ -10,17 +10,20 @@ import { Bot, Landmark } from 'lucide-react';
 import { APP_CONFIG } from '../config';
 import { Model, Session, Agent, Theme } from '../types';
 import { ICON_MAP } from '../utils/iconMap';
+import { FONT_SIZE_OPTIONS, type FontSize } from '../hooks/useFontSize';
 
 interface HeaderProps {
   isSettingsPage: boolean;
   pageTitle?: string;
   sidebarOpen: boolean;
   theme: Theme;
+  fontSize: FontSize;
   currentSession: Session | undefined;
   currentAgent: Agent | undefined;
   models: Model[];
   onToggleSidebar: () => void;
   onToggleTheme: () => void;
+  onSetFontSize: (size: FontSize) => void;
   onRefreshModels: () => void;
 }
 
@@ -29,11 +32,13 @@ export function Header({
   pageTitle,
   sidebarOpen,
   theme,
+  fontSize,
   currentSession,
   currentAgent,
   models,
   onToggleSidebar,
   onToggleTheme,
+  onSetFontSize,
   onRefreshModels,
 }: HeaderProps) {
   const formatModelName = (modelId: string) => {
@@ -83,6 +88,33 @@ export function Header({
         )}
       </div>
       <div className="flex items-center gap-2">
+        {/* 字体档位：小 / 中 / 大（仿通达信五号 / 小四 / 小三） */}
+        <Tooltip content="界面字体大小：小 / 中 / 大">
+          <div className="flex items-center rounded overflow-hidden" style={{ border: '1px solid var(--td-component-border)' }}>
+            {FONT_SIZE_OPTIONS.map(opt => (
+              <button
+                key={opt.value}
+                type="button"
+                title={opt.desc}
+                onClick={() => onSetFontSize(opt.value)}
+                className="px-2 leading-none transition-colors"
+                style={{
+                  minWidth: 26,
+                  height: 26,
+                  fontSize: opt.value === 'large' ? 14 : opt.value === 'small' ? 11 : 12,
+                  fontWeight: fontSize === opt.value ? 700 : 400,
+                  cursor: 'pointer',
+                  border: 'none',
+                  borderLeft: opt.value === 'small' ? 'none' : '1px solid var(--td-component-border)',
+                  backgroundColor: fontSize === opt.value ? 'var(--td-brand-color)' : 'transparent',
+                  color: fontSize === opt.value ? '#fff' : 'var(--td-text-color-secondary)',
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </Tooltip>
         <Tooltip content={theme === 'light' ? '切换到故宫红模式' : theme === 'palace' ? '切换到深色模式' : '切换到浅色模式'}>
           <Button
             variant="outline"

@@ -669,7 +669,7 @@ export function ToolCallsCollapse({ toolCalls, isStreaming = false }: ToolCallsC
             {count > 1 && (
               <span 
                 className="text-xs"
-                style={{ color: 'var(--td-text-color-placeholder)', fontSize: '10px' }}
+                style={{ color: 'var(--td-text-color-placeholder)', fontSize: 'calc(10px * var(--font-scale, 1))' }}
               >
                 {count}
               </span>

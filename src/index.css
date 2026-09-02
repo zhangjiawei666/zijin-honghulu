@@ -51,6 +51,114 @@
   --color-accent-foreground: 61 32 32;
 }
 
+/* ===== 字体档位（小 / 中 / 大，仿通达信中文字号规格）=====
+ *
+ * 通达信默认报价字体为「小四 12pt」，调小取「五号 10.5pt」，调大取「小三 15pt」。
+ * 据此换算为相对默认的缩放系数：0.875 / 1.000 / 1.250，由 useFontSize 写入
+ * <html data-font-size> 与 --font-scale。
+ *
+ * 说明：大号标题（headline / display）做「衰减缩放」，避免 48px、64px 这类
+ * 展示级字号在放大档被撑得失去比例；正文与表格则完整缩放。
+ */
+html {
+  --font-scale: 1;
+  /* 衰减系数：基准 1，标题类按 (scale - 1) 的比例部分生效 */
+  --font-scale-headline: 1;
+  --font-scale-display: 1;
+}
+
+html[data-font-size="small"] {
+  --font-scale: 0.875;
+  --font-scale-headline: 0.925;
+  --font-scale-display: 0.95;
+}
+
+html[data-font-size="medium"] {
+  --font-scale: 1;
+  --font-scale-headline: 1;
+  --font-scale-display: 1;
+}
+
+html[data-font-size="large"] {
+  --font-scale: 1.25;
+  --font-scale-headline: 1.15;
+  --font-scale-display: 1.1;
+}
+
+/* 覆盖 tdesign 字号变量（属性选择器优先级高于 tdesign 的 :root，确保生效） */
+html[data-font-size] {
+  /* 正文 / 链接 / 标记 —— 完整缩放 */
+  --td-font-size-body-small: calc(12px * var(--font-scale));
+  --td-font-size-body-medium: calc(14px * var(--font-scale));
+  --td-font-size-body-large: calc(16px * var(--font-scale));
+  --td-font-size-link-small: calc(12px * var(--font-scale));
+  --td-font-size-link-medium: calc(14px * var(--font-scale));
+  --td-font-size-link-large: calc(16px * var(--font-scale));
+  --td-font-size-mark-small: calc(12px * var(--font-scale));
+  --td-font-size-mark-medium: calc(14px * var(--font-scale));
+
+  /* 小标题 —— 轻度衰减 */
+  --td-font-size-title-small: calc(14px * var(--font-scale));
+  --td-font-size-title-medium: calc(16px * var(--font-scale));
+  --td-font-size-title-large: calc(18px * var(--font-scale-headline));
+  --td-font-size-title-extraLarge: calc(20px * var(--font-scale-headline));
+
+  /* 展示级标题 —— 明显衰减，防止撑爆布局 */
+  --td-font-size-headline-small: calc(24px * var(--font-scale-headline));
+  --td-font-size-headline-medium: calc(28px * var(--font-scale-headline));
+  --td-font-size-headline-large: calc(36px * var(--font-scale-headline));
+  --td-font-size-display-medium: calc(48px * var(--font-scale-display));
+  --td-font-size-display-large: calc(64px * var(--font-scale-display));
+
+  /* 行高同步缩放，否则放大后文字会挤在一起 */
+  --td-line-height-body-small: calc(20px * var(--font-scale));
+  --td-line-height-body-medium: calc(22px * var(--font-scale));
+  --td-line-height-body-large: calc(24px * var(--font-scale));
+  --td-line-height-link-small: calc(20px * var(--font-scale));
+  --td-line-height-link-medium: calc(22px * var(--font-scale));
+  --td-line-height-link-large: calc(24px * var(--font-scale));
+  --td-line-height-mark-small: calc(20px * var(--font-scale));
+  --td-line-height-mark-medium: calc(22px * var(--font-scale));
+  --td-line-height-title-small: calc(22px * var(--font-scale));
+  --td-line-height-title-medium: calc(24px * var(--font-scale));
+  --td-line-height-title-large: calc(26px * var(--font-scale-headline));
+  --td-line-height-title-extraLarge: calc(28px * var(--font-scale-headline));
+  --td-line-height-headline-small: calc(32px * var(--font-scale-headline));
+  --td-line-height-headline-medium: calc(36px * var(--font-scale-headline));
+  --td-line-height-headline-large: calc(44px * var(--font-scale-headline));
+  --td-line-height-display-medium: calc(56px * var(--font-scale-display));
+  --td-line-height-display-large: calc(72px * var(--font-scale-display));
+}
+
+/* ===== tailwind 字号工具类随档位缩放 =====
+ * 项目大量使用 text-xs / text-sm / text-base 等类名，这些是固定 rem 值，
+ * 不会跟随 --font-scale。这里统一改写为 calc()，让它们也随档位缩放。
+ * 与 tailwind utilities 同优先级，靠书写顺序在后覆盖。
+ */
+.text-xs   { font-size: calc(0.75rem * var(--font-scale, 1)); }
+.text-sm   { font-size: calc(0.875rem * var(--font-scale, 1)); }
+.text-base { font-size: calc(1rem * var(--font-scale, 1)); }
+.text-lg   { font-size: calc(1.125rem * var(--font-scale, 1)); }
+.text-xl   { font-size: calc(1.25rem * var(--font-scale, 1)); }
+.text-2xl  { font-size: calc(1.5rem * var(--font-scale, 1)); }
+.text-3xl  { font-size: calc(1.875rem * var(--font-scale, 1)); }
+.text-4xl  { font-size: calc(2.25rem * var(--font-scale, 1)); }
+
+/* 各页面内联 style 可直接用的字号变量（等价于常见 px 值 × 缩放系数） */
+html {
+  --fs-10: calc(10px * var(--font-scale, 1));
+  --fs-11: calc(11px * var(--font-scale, 1));
+  --fs-12: calc(12px * var(--font-scale, 1));
+  --fs-13: calc(13px * var(--font-scale, 1));
+  --fs-14: calc(14px * var(--font-scale, 1));
+  --fs-15: calc(15px * var(--font-scale, 1));
+  --fs-16: calc(16px * var(--font-scale, 1));
+  --fs-17: calc(17px * var(--font-scale, 1));
+  --fs-18: calc(18px * var(--font-scale, 1));
+  --fs-20: calc(20px * var(--font-scale, 1));
+  --fs-23: calc(23px * var(--font-scale, 1));
+}
+
 /* ===== 基础样式 ===== */
 * {
   margin: 0;
@@ -451,7 +559,7 @@ t-chat-sender::part(send-btn):disabled,
 
 .chat-markdown code {
   font-family: 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   color: var(--td-text-color-primary);
 }
 
@@ -571,7 +679,7 @@ t-chat-sender::part(send-btn):disabled,
   gap: 4px;
   padding: 2px 8px;
   border-radius: 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   font-weight: 500;
   transition: all 0.15s ease;
 }
@@ -617,7 +725,7 @@ t-chat-sender::part(send-btn):disabled,
   height: 20px;
   padding: 0 6px;
   border-radius: 10px;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale, 1));
   font-weight: 600;
   background-color: var(--td-brand-color-light);
   color: var(--td-brand-color);
@@ -630,7 +738,7 @@ t-chat-sender::part(send-btn):disabled,
   gap: 4px;
   padding: 4px 12px;
   border-radius: 16px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -716,7 +824,7 @@ t-chat-sender::part(send-btn):disabled,
 
 .mobile-brand-name {
   color: var(--td-text-color-primary);
-  font-size: 16px;
+  font-size: calc(16px * var(--font-scale, 1));
   line-height: 1.25;
   font-weight: 600;
 }
@@ -724,7 +832,7 @@ t-chat-sender::part(send-btn):disabled,
 .mobile-brand-subtitle,
 .monitor-eyebrow {
   color: var(--td-text-color-secondary);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   line-height: 1.4;
 }
 
@@ -736,7 +844,7 @@ t-chat-sender::part(send-btn):disabled,
   background: var(--td-bg-color-container);
   color: var(--td-brand-color);
   cursor: pointer;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
 }
 
 .mobile-main {
@@ -785,7 +893,7 @@ t-chat-sender::part(send-btn):disabled,
 
 .monitor-hero h1 {
   color: var(--td-text-color-primary);
-  font-size: 23px;
+  font-size: calc(23px * var(--font-scale, 1));
   line-height: 1.3;
   font-weight: 600;
   margin: 4px 0;
@@ -793,7 +901,7 @@ t-chat-sender::part(send-btn):disabled,
 
 .monitor-hero p:not(.monitor-eyebrow) {
   color: var(--td-text-color-secondary);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   line-height: 1.5;
 }
 
@@ -822,12 +930,12 @@ t-chat-sender::part(send-btn):disabled,
 
 .mobile-status-card > span {
   color: var(--td-text-color-secondary);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
 }
 
 .mobile-status-card > strong {
   color: var(--td-text-color-primary);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale, 1));
   font-weight: 600;
 }
 
@@ -849,14 +957,14 @@ t-chat-sender::part(send-btn):disabled,
 
 .mobile-section-title h2 {
   color: var(--td-text-color-primary);
-  font-size: 17px;
+  font-size: calc(17px * var(--font-scale, 1));
   line-height: 1.3;
   font-weight: 600;
 }
 
 .mobile-section-title p {
   color: var(--td-text-color-secondary);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
   margin-top: 3px;
 }
 
@@ -902,7 +1010,7 @@ t-chat-sender::part(send-btn):disabled,
 .quote-ident strong,
 .signal-topline strong {
   color: var(--td-text-color-primary);
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale, 1));
   font-weight: 600;
 }
 
@@ -910,7 +1018,7 @@ t-chat-sender::part(send-btn):disabled,
 .signal-topline span,
 .mobile-signal-card time {
   color: var(--td-text-color-secondary);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
 }
 
 .quote-price {
@@ -919,12 +1027,12 @@ t-chat-sender::part(send-btn):disabled,
 
 .quote-price strong {
   color: var(--td-text-color-primary);
-  font-size: 16px;
+  font-size: calc(16px * var(--font-scale, 1));
   font-weight: 600;
 }
 
 .quote-price span {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale, 1));
 }
 
 .quote-up strong,
@@ -958,7 +1066,7 @@ t-chat-sender::part(send-btn):disabled,
 
 .mobile-signal-card p {
   color: var(--td-text-color-secondary);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   line-height: 1.55;
   margin: 8px 0;
 }
@@ -980,7 +1088,7 @@ t-chat-sender::part(send-btn):disabled,
 
 .mobile-import-content p {
   color: var(--td-text-color-secondary);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
 }
 
 @media (max-width: 480px) {

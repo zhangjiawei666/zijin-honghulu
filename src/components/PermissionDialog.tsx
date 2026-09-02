@@ -158,7 +158,7 @@ export function PermissionDialog({ visible, request, onAllow, onDeny }: Permissi
               }}
               contentStyle={{
                 fontFamily: 'monospace',
-                fontSize: '13px',
+                fontSize: 'calc(13px * var(--font-scale, 1))',
                 wordBreak: 'break-all'
               }}
             >

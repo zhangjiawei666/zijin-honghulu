@@ -15,6 +15,7 @@ import { useChat } from './hooks/useChat';
 import { useModels } from './hooks/useModels';
 import { useSessions } from './hooks/useSessions';
 import { useTheme } from './hooks/useTheme';
+import { useFontSize } from './hooks/useFontSize';
 import { APP_CONFIG } from './config';
 import type { PermissionMode } from './types';
 
@@ -22,6 +23,7 @@ function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
   const { theme, toggleTheme } = useTheme();
+  const { fontSize, setFontSize } = useFontSize();
   const { agents, addAgent, updateAgent, deleteAgent, getAgent } = useAgents();
   const { models, selectedModel, setSelectedModel, fetchModels } = useModels();
   const {
@@ -182,11 +184,13 @@ function AppContent() {
           pageTitle={pageTitle}
           sidebarOpen={sidebarOpen}
           theme={theme}
+          fontSize={fontSize}
           currentSession={currentSession}
           currentAgent={getAgent(currentSession?.agentId || 'default')}
           models={models}
           onToggleSidebar={() => setSidebarOpen(open => !open)}
           onToggleTheme={toggleTheme}
+          onSetFontSize={setFontSize}
           onRefreshModels={fetchModels}
         />
 
@@ -207,6 +211,8 @@ function AppContent() {
                   onAdd={addAgent}
                   onUpdate={updateAgent}
                   onDelete={deleteAgent}
+                  fontSize={fontSize}
+                  onSetFontSize={setFontSize}
                 />
               }
             />

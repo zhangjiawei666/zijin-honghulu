@@ -147,14 +147,14 @@ function buildPrintHtml(innerHtml: string): string {
 <style>
 @page { size: A4; margin: 18mm 16mm; }
 * { box-sizing: border-box; }
-body { font-family: "Microsoft YaHei","PingFang SC","Helvetica Neue",sans-serif; color:#1f2329; font-size:12px; line-height:1.75; margin:0; }
-h1 { text-align:center; font-size:22px; margin:0 0 2px; }
-.report-date { text-align:center; color:#666; font-size:12px; margin:0 0 14px; }
-.report-liner { background:#f5f7ff; border-left:4px solid #2f54eb; padding:8px 12px; margin:8px 0 16px; font-size:12px; color:#333; }
-h2 { font-size:17px; border-left:4px solid #2f54eb; padding-left:8px; margin:22px 0 10px; }
-h3 { font-size:14px; margin:16px 0 8px; color:#333; }
-h4 { font-size:13px; margin:10px 0 6px; color:#1f2329; }
-table { width:100%; border-collapse:collapse; margin:8px 0 14px; font-size:11px; }
+body { font-family: "Microsoft YaHei","PingFang SC","Helvetica Neue",sans-serif; color:#1f2329; font-size:calc(12px * var(--font-scale, 1)); line-height:1.75; margin:0; }
+h1 { text-align:center; font-size:calc(22px * var(--font-scale, 1)); margin:0 0 2px; }
+.report-date { text-align:center; color:#666; font-size:calc(12px * var(--font-scale, 1)); margin:0 0 14px; }
+.report-liner { background:#f5f7ff; border-left:4px solid #2f54eb; padding:8px 12px; margin:8px 0 16px; font-size:calc(12px * var(--font-scale, 1)); color:#333; }
+h2 { font-size:calc(17px * var(--font-scale, 1)); border-left:4px solid #2f54eb; padding-left:8px; margin:22px 0 10px; }
+h3 { font-size:calc(14px * var(--font-scale, 1)); margin:16px 0 8px; color:#333; }
+h4 { font-size:calc(13px * var(--font-scale, 1)); margin:10px 0 6px; color:#1f2329; }
+table { width:100%; border-collapse:collapse; margin:8px 0 14px; font-size:calc(11px * var(--font-scale, 1)); }
 th,td { border:1px solid #b8bcc4; padding:5px 8px; text-align:left; vertical-align:top; word-break:break-all; }
 th { background:#eef1ff; font-weight:700; }
 strong { font-weight:700; }
@@ -163,7 +163,7 @@ li { margin:2px 0; }
 .company { border:1px solid #d5d8de; border-radius:6px; padding:10px 12px; margin:10px 0; page-break-inside:avoid; }
 .dim { font-weight:700; margin:8px 0 2px; color:#2f54eb; }
 blockquote { margin:8px 0; }
-.footer { margin-top:26px; border-top:1px solid #c9ccd4; padding-top:8px; color:#888; font-size:11px; text-align:center; }
+.footer { margin-top:26px; border-top:1px solid #c9ccd4; padding-top:8px; color:#888; font-size:calc(11px * var(--font-scale, 1)); text-align:center; }
 </style>
 </head>
 <body>

@@ -22,12 +22,17 @@ import {
 } from 'tdesign-icons-react';
 import { Bot, Sparkles, Code, FileText, Globe, Lightbulb } from 'lucide-react';
 import { CustomAgent, PermissionMode } from '../types';
+import { FONT_SIZE_OPTIONS, type FontSize } from '../hooks/useFontSize';
 
 interface SettingsPageProps {
   agents: CustomAgent[];
   onAdd: (agent: Omit<CustomAgent, 'id' | 'createdAt' | 'updatedAt'>) => CustomAgent;
   onUpdate: (id: string, updates: Partial<Omit<CustomAgent, 'id' | 'createdAt'>>) => void;
   onDelete: (id: string) => void;
+  /** 当前字体档位（小 / 中 / 大） */
+  fontSize: FontSize;
+  /** 切换字体档位 */
+  onSetFontSize: (size: FontSize) => void;
 }
 
 type LoginMethod = 'env' | 'cli' | 'none';
@@ -112,7 +117,9 @@ export function SettingsPage({
   agents, 
   onAdd, 
   onUpdate, 
-  onDelete 
+  onDelete,
+  fontSize,
+  onSetFontSize,
 }: SettingsPageProps) {
   const [editingAgent, setEditingAgent] = useState<CustomAgent | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -403,6 +410,78 @@ export function SettingsPage({
           </h1>
           <p style={{ color: 'var(--td-text-color-secondary)' }}>
             管理登录配置和自定义 Agent
+          </p>
+        </div>
+
+        {/* 界面字体 */}
+        <div>
+          <div className="mb-4">
+            <h2
+              className="text-lg font-medium"
+              style={{ color: 'var(--td-text-color-primary)' }}
+            >
+              界面字体
+            </h2>
+            <p
+              className="text-sm mt-1"
+              style={{ color: 'var(--td-text-color-secondary)' }}
+            >
+              三档字号仿通达信「经典字体设置」规格，切换后立即生效并自动保存
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {FONT_SIZE_OPTIONS.map(opt => {
+              const active = fontSize === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => onSetFontSize(opt.value)}
+                  className="text-left rounded-lg p-3 transition-colors"
+                  style={{
+                    cursor: 'pointer',
+                    border: active
+                      ? '2px solid var(--td-brand-color)'
+                      : '1px solid var(--td-component-border)',
+                    backgroundColor: active
+                      ? 'var(--td-brand-color-1)'
+                      : 'var(--td-bg-color-container)',
+                  }}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span
+                      style={{
+                        fontWeight: 600,
+                        fontSize: 'calc(15px * var(--font-scale, 1))',
+                        color: active
+                          ? 'var(--td-brand-color)'
+                          : 'var(--td-text-color-primary)',
+                      }}
+                    >
+                      {opt.label}
+                    </span>
+                    {active && <CheckIcon size="16px" style={{ color: 'var(--td-brand-color)' }} />}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 'calc(12px * var(--font-scale, 1))',
+                      color: 'var(--td-text-color-secondary)',
+                    }}
+                  >
+                    {opt.desc}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <p
+            className="text-xs mt-2"
+            style={{ color: 'var(--td-text-color-placeholder)', lineHeight: 1.7 }}
+          >
+            字号规格：小＝五号 10.5pt（缩放 0.875）· 中＝小四 12pt（缩放 1.0，通达信默认）·
+            大＝小三 15pt（缩放 1.25）。表格、按钮、对话框等界面元素同步缩放。
           </p>
         </div>
 

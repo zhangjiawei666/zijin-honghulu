@@ -232,7 +232,7 @@ function DayEditDialog({ open, dateToken, onClose, onSaved }: {
       {loading ? (
         <div style={{ padding: '32px 0', textAlign: 'center' }}>
           <Loader size={22} className="animate-spin" style={{ margin: '0 auto 10px', color: 'var(--td-brand-color)' }} />
-          <p style={{ fontSize: 13, color: 'var(--td-text-color-secondary)' }}>正在读取该日数据……</p>
+          <p style={{ fontSize: 'calc(13px * var(--font-scale, 1))', color: 'var(--td-text-color-secondary)' }}>正在读取该日数据……</p>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -242,7 +242,7 @@ function DayEditDialog({ open, dateToken, onClose, onSaved }: {
 
           {/* 日期类型 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 13, color: 'var(--td-text-color-secondary)', minWidth: 60 }}>日期类型</span>
+            <span style={{ fontSize: 'calc(13px * var(--font-scale, 1))', color: 'var(--td-text-color-secondary)', minWidth: 60 }}>日期类型</span>
             <Radio.Group value={dayType} onChange={(v) => setDayType(String(v))} variant="default-filled">
               {DAY_TYPE_OPTIONS.map(o => <Radio.Button key={o.value} value={o.value}>{o.label}</Radio.Button>)}
             </Radio.Group>
@@ -251,7 +251,7 @@ function DayEditDialog({ open, dateToken, onClose, onSaved }: {
           {/* 板块列表 */}
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <span style={{ fontSize: 13, color: 'var(--td-text-color-secondary)' }}>
+              <span style={{ fontSize: 'calc(13px * var(--font-scale, 1))', color: 'var(--td-text-color-secondary)' }}>
                 板块与涨停数（合计 <strong style={{ color: UP_COLOR }}>{total}</strong> 只）
               </span>
               <Button
@@ -264,13 +264,13 @@ function DayEditDialog({ open, dateToken, onClose, onSaved }: {
 
             <div style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
               {drafts.length === 0 && (
-                <p style={{ fontSize: 13, color: 'var(--td-text-color-placeholder)', textAlign: 'center', padding: '20px 0' }}>
+                <p style={{ fontSize: 'calc(13px * var(--font-scale, 1))', color: 'var(--td-text-color-placeholder)', textAlign: 'center', padding: '20px 0' }}>
                   暂无板块，点「添加板块」开始录入
                 </p>
               )}
               {drafts.map((d, i) => (
                 <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <span style={{ fontSize: 12, color: 'var(--td-text-color-placeholder)', width: 34, flexShrink: 0 }}>
+                  <span style={{ fontSize: 'calc(12px * var(--font-scale, 1))', color: 'var(--td-text-color-placeholder)', width: 34, flexShrink: 0 }}>
                     板块{i + 1}
                   </span>
                   <Input
@@ -297,7 +297,7 @@ function DayEditDialog({ open, dateToken, onClose, onSaved }: {
             </div>
           </div>
 
-          <p style={{ fontSize: 12, color: 'var(--td-text-color-placeholder)', lineHeight: 1.7, margin: 0 }}>
+          <p style={{ fontSize: 'calc(12px * var(--font-scale, 1))', color: 'var(--td-text-color-placeholder)', lineHeight: 1.7, margin: 0 }}>
             板块名称留空的行会被忽略。保存后该日标记为「手动录入」，自动更新不再覆盖；
             需要恢复自动抓取时，点左下角「清空该日」即可。
           </p>
@@ -609,11 +609,11 @@ export function SectorEffectPage() {
     <div style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
       {/* 标题区 */}
       <div style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 20, fontWeight: 700, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 8, color: 'var(--td-text-color-primary)' }}>
+        <h2 style={{ fontSize: 'calc(20px * var(--font-scale, 1))', fontWeight: 700, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 8, color: 'var(--td-text-color-primary)' }}>
           <Flame size={20} style={{ color: 'var(--td-brand-color)', flexShrink: 0 }} />
           板块效应
         </h2>
-        <p style={{ fontSize: 13, margin: 0, color: 'var(--td-text-color-secondary)', lineHeight: 1.6 }}>
+        <p style={{ fontSize: 'calc(13px * var(--font-scale, 1))', margin: 0, color: 'var(--td-text-color-secondary)', lineHeight: 1.6 }}>
           按交易日统计 A 股涨停股并归集到行业板块，以矩阵表格展示每日板块分布。
           数据自动保留在本地，支持手动刷新更新；数据源异常时可开「手动编辑」逐日手工修正。
           不把涨停家数直接等同于板块强度或买卖建议。
@@ -652,7 +652,7 @@ export function SectorEffectPage() {
               {editMode ? '退出编辑' : '手动编辑'}
             </Button>
           </Tooltip>
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--td-text-color-placeholder)' }}>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, fontSize: 'calc(12px * var(--font-scale, 1))', color: 'var(--td-text-color-placeholder)' }}>
             <Clock size={14} /><span>交易日当日 20:00 更新</span>
           </div>
         </div>
@@ -668,7 +668,7 @@ export function SectorEffectPage() {
         <Card bordered>
           <div style={{ padding: '48px 0', textAlign: 'center' }}>
             <Loader size={26} className="animate-spin" style={{ margin: '0 auto 12px', color: 'var(--td-brand-color)' }} />
-            <p style={{ fontSize: 14, color: 'var(--td-text-color-secondary)' }}>正在加载板块效应数据……</p>
+            <p style={{ fontSize: 'calc(14px * var(--font-scale, 1))', color: 'var(--td-text-color-secondary)' }}>正在加载板块效应数据……</p>
           </div>
         </Card>
       )}
@@ -679,7 +679,7 @@ export function SectorEffectPage() {
           {/* 统计栏 + 图例 + 按钮 */}
           <div style={{ marginBottom: 10 }}>
             {/* 第一行：统计数据 */}
-            <div style={{ fontSize: 13, color: 'var(--td-text-color-secondary)', display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', marginBottom: 6 }}>
+            <div style={{ fontSize: 'calc(13px * var(--font-scale, 1))', color: 'var(--td-text-color-secondary)', display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', marginBottom: 6 }}>
               <span style={{ fontWeight: 600, color: 'var(--td-text-color-primary)' }}>板块效应</span>
               <span>共 <strong>{data.totalDates}</strong> 天</span>
               <span>·</span>
@@ -696,7 +696,7 @@ export function SectorEffectPage() {
               </div>
             </div>
             {/* 第二行：颜色图例 */}
-            <div style={{ fontSize: 12, color: 'var(--td-text-color-placeholder)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 'calc(12px * var(--font-scale, 1))', color: 'var(--td-text-color-placeholder)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                 <span style={{ width: 12, height: 12, borderRadius: 2, backgroundColor: '#fff1f0', border: '1px solid #ffccc7' }} /> 榜首板块
               </span>
@@ -825,7 +825,7 @@ export function SectorEffectPage() {
 
           {/* 底部说明 */}
           {data.note && (
-            <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--td-component-stroke)', fontSize: 12, lineHeight: 1.8, color: 'var(--td-text-color-placeholder)' }}>
+            <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--td-component-stroke)', fontSize: 'calc(12px * var(--font-scale, 1))', lineHeight: 1.8, color: 'var(--td-text-color-placeholder)' }}>
               <div>{data.note}</div>
               <div style={{ marginTop: 4 }}>以上内容基于公开行情数据统计，仅供研究参考，不构成投资建议。市场有风险，投资需谨慎。</div>
             </div>
@@ -846,7 +846,7 @@ export function SectorEffectPage() {
         <Card bordered>
           <div style={{ padding: '48px 0', textAlign: 'center' }}>
             <Database size={40} style={{ margin: '0 auto 12px', color: 'var(--td-text-color-placeholder)' }} />
-            <p style={{ fontSize: 14, color: 'var(--td-text-color-secondary)' }}>{data.note || '暂无数据'}</p>
+            <p style={{ fontSize: 'calc(14px * var(--font-scale, 1))', color: 'var(--td-text-color-secondary)' }}>{data.note || '暂无数据'}</p>
             <Button theme="primary" icon={<RefreshCw size={16} />} onClick={handleRefresh} style={{ marginTop: 12 }}>获取最新数据</Button>
           </div>
         </Card>
@@ -856,9 +856,9 @@ export function SectorEffectPage() {
       {data && data.mode === 'single' && (
         <Card bordered>
           <div style={{ marginBottom: 12, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-            <div><div style={{ fontSize: 11, color: 'var(--td-text-color-placeholder)' }}>统计日期</div><div style={{ fontSize: 16, fontWeight: 600 }}>{data.date}</div></div>
-            <div><div style={{ fontSize: 11, color: 'var(--td-text-color-placeholder)' }}>涨停总数</div><div style={{ fontSize: 16, fontWeight: 600, color: UP_COLOR }}>{data.totalLimitUp ?? 0} 只</div></div>
-            <div><div style={{ fontSize: 11, color: 'var(--td-text-color-placeholder)' }}>涉及板块</div><div style={{ fontSize: 16, fontWeight: 600 }}>{data.sectors?.length ?? 0} 个</div></div>
+            <div><div style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: 'var(--td-text-color-placeholder)' }}>统计日期</div><div style={{ fontSize: 'calc(16px * var(--font-scale, 1))', fontWeight: 600 }}>{data.date}</div></div>
+            <div><div style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: 'var(--td-text-color-placeholder)' }}>涨停总数</div><div style={{ fontSize: 'calc(16px * var(--font-scale, 1))', fontWeight: 600, color: UP_COLOR }}>{data.totalLimitUp ?? 0} 只</div></div>
+            <div><div style={{ fontSize: 'calc(11px * var(--font-scale, 1))', color: 'var(--td-text-color-placeholder)' }}>涉及板块</div><div style={{ fontSize: 'calc(16px * var(--font-scale, 1))', fontWeight: 600 }}>{data.sectors?.length ?? 0} 个</div></div>
           </div>
           {data.substitutedDate && <Alert theme="warning" message={`${data.requestedDate} 无有效收盘数据，已改用 ${data.substitutedDate}`} style={{ marginBottom: 12 }} />}
           {(!data.sectors || data.sectors.length === 0) ? (
@@ -886,7 +886,7 @@ export function SectorEffectPage() {
         .matrix-table {
           width: 100%;
           border-collapse: collapse;
-          font-size: 13px;
+          font-size: calc(13px * var(--font-scale, 1));
           min-width: max(100%, ${(colCount + 1) * 110}px);
         }
 
@@ -899,7 +899,7 @@ export function SectorEffectPage() {
           padding: 8px 6px;
           text-align: center;
           font-weight: 600;
-          font-size: 12px;
+          font-size: calc(12px * var(--font-scale, 1));
           color: var(--td-text-color-primary, #333);
           white-space: nowrap;
         }
@@ -941,17 +941,17 @@ export function SectorEffectPage() {
           width: 90px;
         }
 
-        .matrix-table .date-text { font-size: 12px; color: var(--td-text-color-primary, #333); font-variant-numeric: tabular-nums; }
-        .matrix-table .date-week { font-size: 10px; margin-left: 4px; opacity: 0.7; }
-        .matrix-table td.rest-cell { text-align: center; font-size: 12px; letter-spacing: 0.5px; height: 30px; }
+        .matrix-table .date-text { font-size: calc(12px * var(--font-scale, 1)); color: var(--td-text-color-primary, #333); font-variant-numeric: tabular-nums; }
+        .matrix-table .date-week { font-size: calc(10px * var(--font-scale, 1)); margin-left: 4px; opacity: 0.7; }
+        .matrix-table td.rest-cell { text-align: center; font-size: calc(12px * var(--font-scale, 1)); letter-spacing: 0.5px; height: 30px; }
         .matrix-table .src-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; margin-right: 4px; vertical-align: middle; flex-shrink: 0; }
-        .matrix-table .date-subst { font-size: 10px; color: var(--td-warning-color, #e37318); cursor: help; margin-left: 2px; }
-        .matrix-table .date-manual { font-size: 10px; color: #722ed1; cursor: help; margin-left: 2px; }
+        .matrix-table .date-subst { font-size: calc(10px * var(--font-scale, 1)); color: var(--td-warning-color, #e37318); cursor: help; margin-left: 2px; }
+        .matrix-table .date-manual { font-size: calc(10px * var(--font-scale, 1)); color: #722ed1; cursor: help; margin-left: 2px; }
 
         /* 编辑模式：整行可点击并高亮 */
         .matrix-table tbody tr.row-editable { cursor: pointer; }
         .matrix-table tbody tr.row-editable:hover { outline: 2px solid var(--td-brand-color, #0052d9); outline-offset: -2px; }
-        .matrix-table .cell-text { font-size: 12.5px; font-weight: 500; cursor: default; display: inline-block; padding: 2px 8px; border-radius: 3px; line-height: 1.6; transition: transform 0.15s ease; }
+        .matrix-table .cell-text { font-size: calc(12.5px * var(--font-scale, 1)); font-weight: 500; cursor: default; display: inline-block; padding: 2px 8px; border-radius: 3px; line-height: 1.6; transition: transform 0.15s ease; }
         .matrix-table .cell-text:hover { transform: scale(1.06); }
 
         /* 月份标题行 */
@@ -961,20 +961,20 @@ export function SectorEffectPage() {
           border-bottom: 2px solid var(--td-component-stroke, #e7e7e7);
           padding: 6px 12px;
           text-align: left;
-          font-size: 13px;
+          font-size: calc(13px * var(--font-scale, 1));
           height: auto;
           color: var(--td-text-color-primary, #333);
         }
         .matrix-table .month-note {
           font-weight: 400;
           color: var(--td-text-color-secondary, #666);
-          font-size: 12px;
+          font-size: calc(12px * var(--font-scale, 1));
         }
 
         /* 折叠省略行 */
         .matrix-table .collapse-row td {
           text-align: center;
-          font-size: 12px;
+          font-size: calc(12px * var(--font-scale, 1));
           letter-spacing: 0.3px;
           height: 28px;
           cursor: pointer;
@@ -984,9 +984,9 @@ export function SectorEffectPage() {
         }
 
         @media (max-width: 768px) {
-          .matrix-table { font-size: 11px; min-width: max(100%, ${colCount * 80 + 90}px); }
+          .matrix-table { font-size: calc(11px * var(--font-scale, 1)); min-width: max(100%, ${colCount * 80 + 90}px); }
           .matrix-table td { min-width: 70px; padding: 2px 2px; height: 28px; }
-          .matrix-table .cell-text { font-size: 11px; padding: 1px 4px; }
+          .matrix-table .cell-text { font-size: calc(11px * var(--font-scale, 1)); padding: 1px 4px; }
           .matrix-table td.cell-date { min-width: 70px; width: 70px; }
         }
       `}</style>
