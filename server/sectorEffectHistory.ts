@@ -7,25 +7,27 @@
  *       属用户模板既有记录，原样保留，不做改写或臆造。
  *
  * 日期轴完整性：
- *   - 保留表格中从 2026/1/5 到 2026/9/2 的**每一天**，交易日与休市日均不省略，共 241 天；
+ *   - 保留模板中从 2026/1/5 到 2026/9/2 的**每一天**，交易日与休市日均不省略，共 241 天；
  *   - trading = 交易日（162 天）
  *   - weekend = 周六周日休市（68 天）
- *   - holiday = 工作日法定节假日休市（11 天，春节 2/16-2/20 与 2/23、清明 4/6、劳动节 5/1 与 5/4-5/5、端午 6/19）
+ *   - holiday = 工作日法定节假日休市（11 天）
  *   - 未来日期（晚于同步日）不入库，避免把尚未发生的日期误标为节假日。
  *
- * 同步规则（重要）：
- *   - **只同步交易日数据**；周末与法定节假日行一律为空，仅保留日期以维持完整日期轴。
- *   - 已过滤腾讯文档中的非板块内容：纯备注文字（如「跟踪资金回流的情况」「按兵不动」）、
- *     纯列号数字（如「1」「2」「3」）、策略备注词（如「低吸」）。共剔除 8 个单元格。
- *   - 本次同步未改动表格的任何展示规则（列对齐、配色、图例、折叠逻辑等均保持不变）。
+ * 同步规则（重要，用户明确要求）：
+ *   - **以腾讯文档为准，不省略任何板块**：读取模板的「板块1~板块18」全部 18 列，
+ *     单日最多保留 18 个板块；前端按 MAX_SECTOR_COLS=18 完整渲染，不再二次裁剪。
+ *   - **只同步交易日**；周末与法定节假日一律留空，仅保留日期行维持日期轴。
+ *   - 已过滤非板块内容：纯备注文字、纯列号数字、策略备注词（共剔除 8 个单元格）。
+ *   - 表格展示规则（列对齐、配色、图例、折叠）未做任何改动。
  *
  * 说明：
- *   - 东财/同花顺涨停池接口不支持历史日期查询（任意历史日期都会被替换为最近交易日），
- *     因此历史数据无法实时回填，只能以本文件作为历史基线。
+ *   - 东财/同花顺涨停池用于每日自动更新；历史数据无法实时回填，以本文件为基线。
  *   - 软件首次启动且本地库无板块效应数据时，自动导入本文件；
  *   - 之后每个交易日 20:00 自动更新 / 手动更新，只追加或更新交易日，不破坏休市日行。
  *   - 「今天尚未收盘」的状态在渲染时按日期动态判断，不写死在数据里。
  */
+export type SectorDayType = 'trading' | 'weekend' | 'holiday';
+
 /**
  * 内置基线的同步版本戳。
  *
@@ -33,9 +35,7 @@
  * 库里记录的 `history_sync_version`，不一致就自动用新基线覆盖旧数据
  * （手动录入的行除外），保证用户更新软件后能拿到最新同步结果。
  */
-export const HISTORY_SYNC_VERSION = '2026-09-02';
-
-export type SectorDayType = 'trading' | 'weekend' | 'holiday';
+export const HISTORY_SYNC_VERSION = '2026-09-02-r3';
 
 export interface SectorEffectHistoryRow {
   /** 日期 YYYYMMDD（含休市日） */
@@ -44,7 +44,7 @@ export interface SectorEffectHistoryRow {
   date_display: string;
   /** 日期类型：trading 交易日 / weekend 周末休市 / holiday 法定节假日休市 */
   day_type: SectorDayType;
-  /** 板块列表（概念口径），按模板列顺序；休市日或待更新日为空数组 */
+  /** 板块列表（概念口径），按模板列顺序；休市日为空数组 */
   sectors: Array<{ name: string; count: number }>;
   /** 当日涨停总数（各板块计数之和）；休市日为 0 */
   total: number;
@@ -2466,9 +2466,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "磷化工", "count": 7 },
       { "name": "培育砖石", "count": 7 },
       { "name": "氟化工", "count": 3 },
-      { "name": "钛白粉", "count": 3 }
+      { "name": "钛白粉", "count": 3 },
+      { "name": "房地产", "count": 4 }
     ],
-    "total": 105
+    "total": 109
   },
   {
     "date": "20260623",
@@ -2485,9 +2486,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "大消费", "count": 11 },
       { "name": "培育砖石", "count": 2 },
       { "name": "工业气体", "count": 4 },
-      { "name": "医疗医药", "count": 4 }
+      { "name": "医疗医药", "count": 4 },
+      { "name": "房地产", "count": 3 }
     ],
-    "total": 64
+    "total": 67
   },
   {
     "date": "20260624",
@@ -2578,9 +2580,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "可控核聚变", "count": 7 },
       { "name": "大消费", "count": 18 },
       { "name": "存储", "count": 5 },
-      { "name": "医药", "count": 26 }
+      { "name": "医药", "count": 26 },
+      { "name": "工业气体", "count": 3 }
     ],
-    "total": 93
+    "total": 96
   },
   {
     "date": "20260630",
@@ -2600,9 +2603,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "大消费", "count": 8 },
       { "name": "AI硬件", "count": 4 },
       { "name": "存储", "count": 7 },
-      { "name": "医药", "count": 2 }
+      { "name": "医药", "count": 2 },
+      { "name": "电子特气", "count": 2 }
     ],
-    "total": 123
+    "total": 125
   },
   {
     "date": "20260701",
@@ -2625,9 +2629,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "大消费", "count": 11 },
       { "name": "地产", "count": 5 },
       { "name": "存储", "count": 5 },
-      { "name": "医疗医药", "count": 11 }
+      { "name": "医疗医药", "count": 11 },
+      { "name": "电子特气", "count": 2 }
     ],
-    "total": 128
+    "total": 130
   },
   {
     "date": "20260702",
@@ -2644,9 +2649,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "AI应用", "count": 4 },
       { "name": "大消费", "count": 7 },
       { "name": "海南", "count": 3 },
-      { "name": "医疗医药", "count": 7 }
+      { "name": "医疗医药", "count": 7 },
+      { "name": "ST摘帽", "count": 6 }
     ],
-    "total": 71
+    "total": 77
   },
   {
     "date": "20260703",
@@ -2660,9 +2666,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "黄金", "count": 6 },
       { "name": "电力", "count": 3 },
       { "name": "大消费", "count": 6 },
-      { "name": "医药", "count": 2 }
+      { "name": "医药", "count": 2 },
+      { "name": "ST摘帽", "count": 6 }
     ],
-    "total": 79
+    "total": 85
   },
   {
     "date": "20260704",
@@ -2758,9 +2765,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "智能电网", "count": 3 },
       { "name": "大消费", "count": 1 },
       { "name": "AI应用", "count": 9 },
-      { "name": "医药", "count": 11 }
+      { "name": "医药", "count": 11 },
+      { "name": "猪肉", "count": 3 }
     ],
-    "total": 87
+    "total": 90
   },
   {
     "date": "20260711",
@@ -2805,9 +2813,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "大消费", "count": 1 },
       { "name": "AI硬件", "count": 2 },
       { "name": "石油石化", "count": 6 },
-      { "name": "医药", "count": 8 }
+      { "name": "医药", "count": 8 },
+      { "name": "公告", "count": 3 }
     ],
-    "total": 62
+    "total": 65
   },
   {
     "date": "20260715",
@@ -2836,9 +2845,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "业绩", "count": 2 },
       { "name": "大消费", "count": 3 },
       { "name": "AI手机", "count": 5 },
-      { "name": "医药", "count": 8 }
+      { "name": "医药", "count": 8 },
+      { "name": "影视", "count": 3 }
     ],
-    "total": 28
+    "total": 31
   },
   {
     "date": "20260717",
@@ -2883,9 +2893,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "大消费", "count": 2 },
       { "name": "AI硬件", "count": 2 },
       { "name": "油服", "count": 4 },
-      { "name": "医药", "count": 2 }
+      { "name": "医药", "count": 2 },
+      { "name": "煤炭", "count": 6 }
     ],
-    "total": 41
+    "total": 47
   },
   {
     "date": "20260721",
@@ -2907,9 +2918,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "智能电网", "count": 3 },
       { "name": "AI硬件", "count": 3 },
       { "name": "黄金", "count": 2 },
-      { "name": "医药", "count": 1 }
+      { "name": "医药", "count": 1 },
+      { "name": "公告", "count": 4 }
     ],
-    "total": 108
+    "total": 112
   },
   {
     "date": "20260722",
@@ -2923,9 +2935,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "电力", "count": 12 },
       { "name": "AI硬件", "count": 2 },
       { "name": "黄金", "count": 3 },
-      { "name": "医药", "count": 5 }
+      { "name": "医药", "count": 5 },
+      { "name": "公告", "count": 4 }
     ],
-    "total": 34
+    "total": 38
   },
   {
     "date": "20260723",
@@ -2944,9 +2957,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "电力+网络设备", "count": 34 },
       { "name": "摘帽", "count": 3 },
       { "name": "黄金", "count": 3 },
-      { "name": "医疗医药", "count": 6 }
+      { "name": "医疗医药", "count": 6 },
+      { "name": "公告", "count": 3 }
     ],
-    "total": 100
+    "total": 103
   },
   {
     "date": "20260724",
@@ -2958,9 +2972,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "锂电池", "count": 2 },
       { "name": "军工", "count": 7 },
       { "name": "智能电网", "count": 6 },
-      { "name": "消费", "count": 2 }
+      { "name": "消费", "count": 2 },
+      { "name": "资产重组", "count": 3 }
     ],
-    "total": 26
+    "total": 29
   },
   {
     "date": "20260725",
@@ -2993,9 +3008,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "智能电网", "count": 11 },
       { "name": "大消费", "count": 13 },
       { "name": "燃气轮机", "count": 3 },
-      { "name": "医药", "count": 9 }
+      { "name": "医药", "count": 9 },
+      { "name": "公告", "count": 3 }
     ],
-    "total": 99
+    "total": 102
   },
   {
     "date": "20260728",
@@ -3010,9 +3026,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "大金融", "count": 1 },
       { "name": "智能电网", "count": 4 },
       { "name": "大消费", "count": 8 },
-      { "name": "AI应用", "count": 6 }
+      { "name": "AI应用", "count": 6 },
+      { "name": "摘帽", "count": 3 }
     ],
-    "total": 45
+    "total": 48
   },
   {
     "date": "20260729",
@@ -3047,9 +3064,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "大消费", "count": 11 },
       { "name": "AI应用", "count": 3 },
       { "name": "汽车产业链", "count": 8 },
-      { "name": "医药", "count": 2 }
+      { "name": "医药", "count": 2 },
+      { "name": "公告", "count": 6 }
     ],
-    "total": 36
+    "total": 42
   },
   {
     "date": "20260731",
@@ -3068,9 +3086,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "被动元件", "count": 2 },
       { "name": "智能电网", "count": 4 },
       { "name": "大消费", "count": 6 },
-      { "name": "医药", "count": 2 }
+      { "name": "医药", "count": 2 },
+      { "name": "资产重组", "count": 3 }
     ],
-    "total": 84
+    "total": 87
   },
   {
     "date": "20260801",
@@ -3121,9 +3140,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "电力", "count": 5 },
       { "name": "消费", "count": 2 },
       { "name": "AI应用", "count": 14 },
-      { "name": "医疗医药", "count": 12 }
+      { "name": "医疗医药", "count": 12 },
+      { "name": "摘帽相关", "count": 4 }
     ],
-    "total": 125
+    "total": 129
   },
   {
     "date": "20260805",
@@ -3165,9 +3185,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "煤炭", "count": 7 },
       { "name": "AI应用", "count": 4 },
       { "name": "电子特气", "count": 4 },
-      { "name": "医疗医药", "count": 6 }
+      { "name": "医疗医药", "count": 6 },
+      { "name": "公告", "count": 5 }
     ],
-    "total": 60
+    "total": 65
   },
   {
     "date": "20260807",
@@ -3182,9 +3203,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "光通信", "count": 3 },
       { "name": "电力", "count": 1 },
       { "name": "AI应用", "count": 2 },
-      { "name": "医疗医药", "count": 20 }
+      { "name": "医疗医药", "count": 20 },
+      { "name": "资产重组", "count": 3 }
     ],
-    "total": 58
+    "total": 61
   },
   {
     "date": "20260808",
@@ -3291,9 +3313,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "光通信", "count": 14 },
       { "name": "军工", "count": 2 },
       { "name": "大消费", "count": 1 },
-      { "name": "医疗医药", "count": 10 }
+      { "name": "医疗医药", "count": 10 },
+      { "name": "生态环保", "count": 3 }
     ],
-    "total": 43
+    "total": 46
   },
   {
     "date": "20260815",
@@ -3327,9 +3350,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "智能电网", "count": 4 },
       { "name": "大消费", "count": 9 },
       { "name": "农林牧渔", "count": 6 },
-      { "name": "医疗医药", "count": 10 }
+      { "name": "医疗医药", "count": 10 },
+      { "name": "股权转让", "count": 3 }
     ],
-    "total": 94
+    "total": 97
   },
   {
     "date": "20260818",
@@ -3344,9 +3368,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "化工", "count": 2 },
       { "name": "大消费", "count": 8 },
       { "name": "农林牧渔", "count": 24 },
-      { "name": "医疗医药", "count": 4 }
+      { "name": "医疗医药", "count": 4 },
+      { "name": "股权转让", "count": 3 }
     ],
-    "total": 67
+    "total": 70
   },
   {
     "date": "20260819",
@@ -3448,9 +3473,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "大消费", "count": 6 },
       { "name": "煤炭", "count": 2 },
       { "name": "农业", "count": 4 },
-      { "name": "医药", "count": 9 }
+      { "name": "医药", "count": 9 },
+      { "name": "股权转让", "count": 3 }
     ],
-    "total": 47
+    "total": 50
   },
   {
     "date": "20260826",
@@ -3467,9 +3493,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "可控核聚变", "count": 3 },
       { "name": "电力", "count": 2 },
       { "name": "农业", "count": 3 },
-      { "name": "医药", "count": 5 }
+      { "name": "医药", "count": 5 },
+      { "name": "公告", "count": 5 }
     ],
-    "total": 38
+    "total": 43
   },
   {
     "date": "20260827",
@@ -3488,9 +3515,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "存储", "count": 3 },
       { "name": "氟化工", "count": 4 },
       { "name": "农林牧渔", "count": 8 },
-      { "name": "医疗医药", "count": 4 }
+      { "name": "医疗医药", "count": 4 },
+      { "name": "业绩增长", "count": 3 }
     ],
-    "total": 60
+    "total": 63
   },
   {
     "date": "20260828",
@@ -3544,9 +3572,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "大消费", "count": 5 },
       { "name": "化工", "count": 3 },
       { "name": "农业", "count": 4 },
-      { "name": "医药", "count": 1 }
+      { "name": "医药", "count": 1 },
+      { "name": "业绩增长", "count": 5 }
     ],
-    "total": 72
+    "total": 77
   },
   {
     "date": "20260901",
@@ -3566,9 +3595,10 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "大消费", "count": 12 },
       { "name": "化工", "count": 2 },
       { "name": "农业", "count": 14 },
-      { "name": "医药", "count": 8 }
+      { "name": "医药", "count": 8 },
+      { "name": "无人驾驶", "count": 3 }
     ],
-    "total": 66
+    "total": 69
   },
   {
     "date": "20260902",
@@ -3585,8 +3615,9 @@ export const SECTOR_EFFECT_HISTORY: SectorEffectHistoryRow[] = [
       { "name": "大消费", "count": 4 },
       { "name": "氟化工", "count": 2 },
       { "name": "大农业", "count": 2 },
-      { "name": "医药", "count": 1 }
+      { "name": "医药", "count": 1 },
+      { "name": "军工", "count": 4 }
     ],
-    "total": 32
+    "total": 36
   },
 ];

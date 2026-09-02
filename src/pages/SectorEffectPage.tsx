@@ -92,6 +92,13 @@ const MONTH_NOTES: Record<number, string> = {
 /** 连续休市日超过此数量时折叠显示为省略行 */
 const COLLAPSE_THRESHOLD = 3;
 
+/**
+ * 板块列数上限，必须与后端 server/sectorEffect.ts 的 MAX_SECTOR_COLS 一致。
+ * 腾讯文档模板实际用到「时间 + 板块1~板块18」（第 19 格仍有数据，如房地产4/钛白粉3），
+ * 即 18 个板块列；不可再私自截断。
+ */
+const MAX_SECTOR_COLS = 18;
+
 // ============= 单日编辑对话框 =============
 
 interface EditDraft {
@@ -460,6 +467,18 @@ export function SectorEffectPage() {
 
   const colCount = Math.max(data?.columns?.length ?? 0, data?.sectors?.length ?? 0, 11);
 
+  /**
+   * 表格实际渲染的板块列数 —— 与腾讯文档模板的「板块1~板块18」对齐。
+   *
+   * 注意：这里曾长期硬编码为 `Math.min(data.maxCols, 11)`，导致后端给了 18 列、
+   * 前端却只画 11 列，用户看到的板块数被无故砍掉。现改为直接采用后端返回的列数
+   * （后端已按 MAX_SECTOR_COLS=18 截断），不再二次裁剪。
+   */
+  const displayColCount = Math.max(
+    1,
+    Math.min(data?.maxCols ?? 0, data?.columns?.length ?? 0, MAX_SECTOR_COLS),
+  );
+
   const historyCount = data?.rows?.filter(r => r.source?.includes('腾讯文档')).length ?? 0;
   const liveCount = (data?.rows?.length ?? 0) - historyCount;
 
@@ -729,7 +748,7 @@ export function SectorEffectPage() {
               <thead>
                 <tr>
                   <th className="col-date">时间</th>
-                  {data.columns.slice(0, Math.min(data.maxCols, 11)).map((col, i) => (
+                  {data.columns.slice(0, displayColCount).map((col, i) => (
                     <th key={i} className={`col-sector ${i < 3 ? 'col-top' : i < 7 ? 'col-mid' : ''}`}>{col}</th>
                   ))}
                 </tr>
@@ -740,7 +759,7 @@ export function SectorEffectPage() {
                   if (item.type === 'month') {
                     return (
                       <tr key={`m-${item.month}`} className="month-header-row">
-                        <td colSpan={Math.min(data.maxCols, 11) + 1} className="month-header-cell">
+                        <td colSpan={displayColCount + 1} className="month-header-cell">
                           <strong>{item.month} 月</strong>
                           {item.note && <span className="month-note"> · {item.note}</span>}
                         </td>
@@ -753,7 +772,7 @@ export function SectorEffectPage() {
                     const cs = DAY_TYPE_STYLE[item.dayType];
                     return (
                       <tr key={`c-${item.startIdx}`} className="collapse-row">
-                        <td colSpan={Math.min(data.maxCols, 11) + 1}
+                        <td colSpan={displayColCount + 1}
                           className="collapse-cell"
                           style={{ backgroundColor: cs?.bg || '#f5f5f5', color: cs?.fg || '#8c8c8c' }}>
                           … 省略 {item.startDate.replace(/\//g, '/')} – {item.endDate.replace(/\//g, '/')} 共 <strong>{item.count}</strong> 天 …
@@ -779,7 +798,7 @@ export function SectorEffectPage() {
                           <span className="date-text" style={{ color: restStyle.fg }}>{row.date}</span>
                           <span className="date-week" style={{ color: restStyle.fg }}>{weekdayOf(row.date)}</span>
                         </td>
-                        <td className="rest-cell" colSpan={Math.min(data.maxCols, 11)}
+                        <td className="rest-cell" colSpan={displayColCount}
                           style={{ backgroundColor: restStyle.bg, color: restStyle.fg }}>
                           {restStyle.label}
                           {row.dayType === 'today' && ' · 今日待更新，今晚 20:00 更新'}
@@ -815,7 +834,7 @@ export function SectorEffectPage() {
                           </Tooltip>
                         )}
                       </td>
-                      {row.cells.slice(0, Math.min(data.maxCols, 11)).map((cell, ci) => renderCell(cell, ci))}
+                      {row.cells.slice(0, displayColCount).map((cell, ci) => renderCell(cell, ci))}
                     </tr>
                   );
                 })}
@@ -866,8 +885,8 @@ export function SectorEffectPage() {
           ) : (
             <div className="matrix-table-wrapper">
               <table className="matrix-table">
-                <thead><tr><th className="col-date">时间</th>{data.sectors!.slice(0, 17).map((_, i) => <th key={i} className={`col-sector ${i < 3 ? 'col-top' : i < 7 ? 'col-mid' : ''}`}>板块{i + 1}</th>)}</tr></thead>
-                <tbody><tr><td className="cell-date"><span className="date-text">{String(data.date ?? '').replace(/(\d{4})(\d{2})(\d{2})/, '$1/$2/$3')}</span></td>{data.sectors!.slice(0, 17).map((sec, i) => renderCell(sec, i))}</tr></tbody>
+                <thead><tr><th className="col-date">时间</th>{data.sectors!.slice(0, MAX_SECTOR_COLS).map((_, i) => <th key={i} className={`col-sector ${i < 3 ? 'col-top' : i < 7 ? 'col-mid' : ''}`}>板块{i + 1}</th>)}</tr></thead>
+                <tbody><tr><td className="cell-date"><span className="date-text">{String(data.date ?? '').replace(/(\d{4})(\d{2})(\d{2})/, '$1/$2/$3')}</span></td>{data.sectors!.slice(0, MAX_SECTOR_COLS).map((sec, i) => renderCell(sec, i))}</tr></tbody>
               </table>
             </div>
           )}

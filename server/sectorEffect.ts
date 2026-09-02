@@ -46,8 +46,8 @@ interface SectorFetchResult {
   source: string;                                // 实际生效的数据源名称
 }
 
-/** 矩阵每行展示的板块列数上限，与用户腾讯文档模板「板块1~板块17」的列数对齐 */
-const MAX_SECTOR_COLS = 17;
+/** 矩阵每行展示的板块列数上限，与用户腾讯文档模板「板块1~板块18」（实际用到第 19 格）的列数对齐 */
+const MAX_SECTOR_COLS = 18;
 
 /**
  * 判断某行是否属于「用户资产」——手动录入 或 腾讯文档模板。
@@ -998,7 +998,7 @@ export function registerSectorEffectRoutes(app: express.Express): void {
       }
 
       // 构建矩阵行。
-      // 每行只取涨停数最多的前 MAX_SECTOR_COLS 个板块：历史基线是概念口径（模板 17 列），
+      // 每行只取涨停数最多的前 MAX_SECTOR_COLS 个板块：历史基线是概念口径（模板 18 列），
       // 实时抓取是东财行业口径（单日可达 40+ 板块），若不截断会让表格列数被单日行业数据撑爆，
       // 导致其余百余行几乎全空。截断后两种口径在同一张表里都能保持可读。
       const todayToken = toDateToken(new Date());
