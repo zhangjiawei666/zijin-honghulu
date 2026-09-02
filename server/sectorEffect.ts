@@ -1026,42 +1026,87 @@ function ensureHistorySeeded(): void {
   }
 }
 
-// ============= 交易日 20:00 自动更新调度器 =============
+// ============= 板块效应自动更新调度器（交易日 17:00 / 18:00 两轮 + 启动补抓） =============
 
 let autoUpdateTimer: ReturnType<typeof setInterval> | null = null;
-let lastAutoUpdateDate: string = '';  // 避免同一天重复更新
+let schedDailyKey: string = '';     // 当前排程所属日期
+let schedRoundsDone: number = 0;    // 当天已完成轮次（0/1/2）
 
-/** 判断是否为工作日（简单判断：周一到周五） */
-function isWeekday(d: Date): boolean {
+/**
+ * A 股休市日（每年初按国务院当年安排更新；若漏配或误配，fetchAndStore 的空结果不写库
+ * 保护仍会兜底，不会用脏数据覆盖有效记录）。
+ * 注：调休补班周六若交易所实际开市，本集合未含，会被当作周末跳过——属边缘情况，可手动更新补齐。
+ */
+const EXCHANGE_HOLIDAYS_2026 = new Set<string>([
+  '20260101', '20260102', '20260103',            // 元旦
+  '20260215', '20260216', '20260217', '20260218', '20260219', '20260220', '20260221', '20260222', // 春节
+  '20260404', '20260405', '20260406',            // 清明
+  '20260501', '20260502', '20260503', '20260504', '20260505', // 劳动
+  '20260619', '20260620', '20260621',            // 端午
+  '20260925', '20260926', '20260927',            // 中秋
+  '20261001', '20261002', '20261003', '20261004', '20261005', '20261006', '20261007', // 国庆
+]);
+
+/** 交易日判定：周一~周五，且非法定休市日 */
+function isTradingDay(d: Date): boolean {
   const day = d.getDay();
-  return day >= 1 && day <= 5;
+  if (day < 1 || day > 5) return false;
+  return !EXCHANGE_HOLIDAYS_2026.has(toDateToken(d));
 }
 
-/** 启动自动更新定时器：每个交易日 20:00 触发（当日标签，避免日期错位） */
+function resetSchedIfNewDay(now: Date): void {
+  const key = toDateToken(now);
+  if (key !== schedDailyKey) {
+    schedDailyKey = key;
+    schedRoundsDone = 0;
+  }
+}
+
+/** 启动自动更新调度器：交易日 17:00、18:00 各抓一次（两轮）；App 在 18:00 后启动则补抓一次 */
 export function startAutoUpdateScheduler(): void {
   if (autoUpdateTimer) return;  // 已启动
 
-  // 每分钟检查一次是否到了 20:00 且是工作日
-  autoUpdateTimer = setInterval(async () => {
+  const fireOnce = async (label: string): Promise<void> => {
     try {
       const now = new Date();
+      if (!isTradingDay(now)) return;
       const todayToken = toDateToken(now);
-
-      // 跳过：非工作日 / 非 20:xx / 当天已更新过
-      if (!isWeekday(now)) return;
-      if (now.getHours() !== 20) return;
-      if (lastAutoUpdateDate === todayToken) return;
-
-      console.log(`[SectorEffect] 自动更新触发: ${todayToken}`);
-      lastAutoUpdateDate = todayToken;
-
+      console.log(`[SectorEffect] 自动更新触发(${label}): ${todayToken}`);
       await fetchAndStore(todayToken);
     } catch (err: any) {
       console.error('[SectorEffect] 自动更新失败:', err?.message || err);
     }
-  }, 60000);  // 每分钟检查一次
+  };
 
-  console.log('[SectorEffect] 自动更新调度器已启动（交易日 20:00 当日入库）');
+  // 每分钟检查一次是否到了 17:00 / 18:00（按日重置轮次）
+  autoUpdateTimer = setInterval(() => {
+    try {
+      const now = new Date();
+      resetSchedIfNewDay(now);
+      if (!isTradingDay(now)) return;
+      const h = now.getHours();
+      if (h === 17 && schedRoundsDone < 1) { schedRoundsDone = 1; fireOnce('17:00'); }
+      else if (h === 18 && schedRoundsDone < 2) { schedRoundsDone = 2; fireOnce('18:00'); }
+    } catch (err: any) {
+      console.error('[SectorEffect] 调度检查异常:', err?.message || err);
+    }
+  }, 60000);
+
+  // 启动补抓：今天为交易日且已过 18:00、且今日尚未更新 → 立即补一次（规避关 App 漏更）
+  (async () => {
+    try {
+      const now = new Date();
+      resetSchedIfNewDay(now);
+      if (isTradingDay(now) && now.getHours() >= 18 && schedRoundsDone < 2) {
+        schedRoundsDone = 2;
+        await fireOnce('启动补抓');
+      }
+    } catch (err: any) {
+      console.error('[SectorEffect] 启动补抓异常:', err?.message || err);
+    }
+  })();
+
+  console.log('[SectorEffect] 自动更新调度器已启动（交易日 17:00/18:00 两轮 + 启动补抓）');
 }
 
 // ============= 路由注册 =============
