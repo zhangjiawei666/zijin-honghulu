@@ -4,7 +4,7 @@ import {
 } from 'tdesign-react';
 import {
   Flame, Loader, RefreshCw, Clock, Database, Pencil, Plus, Trash2, X,
-  Settings2, EyeOff,
+  Settings2, EyeOff, ArrowUp, ArrowDown,
 } from 'lucide-react';
 
 interface PivotCell {
@@ -82,25 +82,21 @@ const COLLAPSE_THRESHOLD = 3;
 
 const WINDOW_OPTIONS = [
   { value: 0, label: '全部' },
-  { value: 10, label: '近10日' },
-  { value: 15, label: '近15日' },
-  { value: 20, label: '近20日' },
+  { value: 10, label: '10' },
+  { value: 15, label: '15' },
+  { value: 20, label: '20' },
 ];
 
 // ============= 配色即情绪：红深=涨停多=高潮防风险；红浅=涨停少=低迷找机会 =============
-function sentimentIntensity(count: number, max: number): number {
-  if (!count || !max) return 0;
-  return Math.min(1, count / max);
-}
-function sentimentBg(count: number, max: number): string {
-  if (!count) return 'transparent';
-  const k = Math.sqrt(sentimentIntensity(count, max)); // 强化中高区间对比
-  const s = [255, 241, 240]; // 浅红 #fff1f0
-  const e = [201, 30, 38]; // 深红
-  const r = Math.round(s[0] + (e[0] - s[0]) * k);
-  const g = Math.round(s[1] + (e[1] - s[1]) * k);
-  const b = Math.round(s[2] + (e[2] - s[2]) * k);
-  return `rgb(${r},${g},${b})`;
+// 按全表最大涨停数做色阶分桶，亮/暗主题各有配色（见 .matrix-table .cell-text.sentiment-*）
+function sentimentClass(count: number, max: number): string {
+  if (!count || !max) return 'sentiment-0';
+  const k = Math.sqrt(Math.min(1, count / max)); // 强化中高区间对比
+  if (k <= 0.2) return 'sentiment-L1';
+  if (k <= 0.4) return 'sentiment-L2';
+  if (k <= 0.65) return 'sentiment-L3';
+  if (k <= 0.85) return 'sentiment-L4';
+  return 'sentiment-L5';
 }
 
 // ============= 单日编辑对话框（保持不变） =============
@@ -506,20 +502,18 @@ export function SectorEffectPage() {
   const renderCell = (cell: PivotCell | undefined, column: PivotColumn) => {
     if (!cell || cell.count === 0) return <td key={column.key} className="sector-cell empty" />;
     const count = cell.count;
-    const bg = sentimentBg(count, maxCount);
-    const intensity = sentimentIntensity(count, maxCount);
-    const textColor = intensity > 0.55 ? '#ffffff' : 'var(--td-text-color-primary, #333)';
-    const isMergedCol = column.merged;
+    const cls = sentimentClass(count, maxCount);
+    // 仅「别名→标准名」合成的单元格（当日含多个子板块）才显示金色圆点角标
     const mergedParts = cell.parts && cell.parts.length > 1 ? cell.parts : null;
     const tip = mergedParts
       ? `${column.label} ${count} 只涨停\n归并自：\n${mergedParts.map(p => `· ${p.name}: ${p.count}`).join('\n')}`
-      : (isMergedCol ? `${column.label}（归并板块）：${count} 只涨停` : `${column.label}：${count} 只涨停`);
+      : `${column.label}：${count} 只涨停`;
     return (
-      <td key={column.key} className="sector-cell" style={{ backgroundColor: bg }}>
+      <td key={column.key} className="sector-cell">
         <Tooltip content={tip} showArrow>
-          <span className="cell-text" style={{ color: textColor }}>
+          <span className={`cell-text ${cls}`}>
             {column.label}{count}
-            {isMergedCol && <sup className="merge-badge" title="归并板块：悬停查看子板块明细">!</sup>}
+            {mergedParts && <span className="merge-badge" title="归并板块：悬停查看子板块明细" />}
           </span>
         </Tooltip>
       </td>
@@ -598,22 +592,6 @@ export function SectorEffectPage() {
           </p>
         </div>
 
-        <Card bordered style={{ marginBottom: 16 }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Tooltip content={editMode ? '退出编辑模式' : '开启后点击任意日期行，可手工修改该日的板块数据'}>
-              <Button size="large" variant="outline" theme={editMode ? 'primary' : 'default'} icon={<Pencil size={16} />} disabled={loading} onClick={() => setEditMode(v => !v)}>{editMode ? '退出编辑' : '手动编辑'}</Button>
-            </Tooltip>
-            <Button size="large" variant="outline" icon={<Settings2 size={16} />} onClick={() => setManageOpen(true)}>板块管理</Button>
-          </div>
-          {hiddenKeys.size > 0 && (
-            <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, fontSize: 'calc(12px * var(--font-scale, 1))', color: 'var(--td-text-color-secondary)' }}>
-              <EyeOff size={13} />
-              <span>已隐藏 {hiddenKeys.size} 列（仅视图，不影响数据）</span>
-              <Button size="small" variant="text" onClick={() => setHiddenKeys(new Set())}>显示全部</Button>
-            </div>
-          )}
-        </Card>
-
         {error && !data && <Alert theme="error" message={error} style={{ marginBottom: 16 }} />}
 
         {loading && !data && (
@@ -626,15 +604,20 @@ export function SectorEffectPage() {
         )}
 
         {data && data.mode === 'matrix' && data.rows.length > 0 && (
-          <Card bordered style={{ overflow: 'visible' }}>
-            <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <Button size="small" variant="outline" onClick={scrollToTop}>回到顶部</Button>
-              <Button size="small" variant="outline" onClick={scrollToToday}>跳到今天</Button>
-              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, fontSize: 'calc(12px * var(--font-scale, 1))', color: 'var(--td-text-color-placeholder)' }}>
+          <Card bordered style={{ overflow: 'visible', position: 'relative' }}>
+            <div className="matrix-toolbar">
+              <Tooltip content={editMode ? '退出编辑模式' : '开启后点击任意日期行，可手工修改该日的板块数据'}>
+                <Button size="small" variant="outline" theme={editMode ? 'primary' : 'default'} icon={<Pencil size={15} />} disabled={loading} onClick={() => setEditMode(v => !v)}>{editMode ? '退出编辑' : '手动编辑'}</Button>
+              </Tooltip>
+              <Button size="small" variant="outline" icon={<Settings2 size={15} />} onClick={() => setManageOpen(true)}>板块管理</Button>
+              {hiddenKeys.size > 0 && (
+                <span className="hidden-hint"><EyeOff size={13} /><span>已隐藏 {hiddenKeys.size} 列</span><Button size="small" variant="text" onClick={() => setHiddenKeys(new Set())}>显示全部</Button></span>
+              )}
+              <div className="toolbar-right">
                 <span className="color-legend" title="颜色越深 = 当日该板块涨停越多 = 情绪越高潮（防风险）；越浅 = 涨停越少 = 低迷（找机会）" />
-                <span>只看近</span>
-                <Select value={windowN} onChange={v => setWindowN(Number(v))} style={{ width: 110 }} options={WINDOW_OPTIONS} />
-                <span>日主线</span>
+                <span className="toolbar-label">只看近</span>
+                <Select value={windowN} onChange={v => setWindowN(Number(v))} style={{ width: 96 }} options={WINDOW_OPTIONS} />
+                <span className="toolbar-label">日主线</span>
               </div>
             </div>
 
@@ -710,6 +693,11 @@ export function SectorEffectPage() {
               </table>
             </div>
 
+            <div className="matrix-fab">
+              <Button size="small" shape="circle" icon={<ArrowUp size={16} />} onClick={scrollToTop} title="回到顶部" />
+              <Button size="small" shape="circle" icon={<ArrowDown size={16} />} onClick={scrollToToday} title="跳到今天" />
+            </div>
+
             {data.note && (
               <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--td-component-stroke)', fontSize: 'calc(12px * var(--font-scale, 1))', lineHeight: 1.8, color: 'var(--td-text-color-placeholder)' }}>
                 <div>{data.note}</div>
@@ -756,7 +744,7 @@ export function SectorEffectPage() {
               <div className="matrix-table-wrapper">
                 <table className="matrix-table">
                   <thead><tr><th className="col-date">时间</th>{data.sectors!.map((_, i) => <th key={i} className="col-sector">板块{i + 1}</th>)}</tr></thead>
-                  <tbody><tr><td className="cell-date"><span className="date-text">{String(data.date ?? '').replace(/(\d{4})(\d{2})(\d{2})/, '$1/$2/$3')}</span></td>{data.sectors!.map((sec, i) => <td key={i} className="sector-cell" style={{ backgroundColor: CELL_BG_NORMAL }}><Tooltip content={`${sec.name}: ${sec.count}只涨停`}><span className="cell-text">{sec.name}{sec.count}</span></Tooltip></td>)}</tr></tbody>
+                  <tbody><tr><td className="cell-date"><span className="date-text">{String(data.date ?? '').replace(/(\d{4})(\d{2})(\d{2})/, '$1/$2/$3')}</span></td>{data.sectors!.map((sec, i) => <td key={i} className="sector-cell"><Tooltip content={`${sec.name}: ${sec.count}只涨停`}><span className="cell-text sentiment-L3">{sec.name}{sec.count}</span></Tooltip></td>)}</tr></tbody>
                 </table>
               </div>
             )}
@@ -774,6 +762,17 @@ export function SectorEffectPage() {
           .matrix-table tbody tr:hover { background: var(--td-bg-color-container-hover, #fafafa); }
           .matrix-table td { border: 1px solid var(--td-component-stroke, #e7e7e7); padding: 4px 4px; text-align: center; vertical-align: middle; height: 34px; min-width: 100px; white-space: nowrap; }
           .matrix-table td.sector-cell.empty { background: #fafafa !important; }
+          .cell-text.sentiment-0 { background: transparent; color: var(--td-text-color-primary, #333); }
+          .cell-text.sentiment-L1 { background: #fff1f0; color: #5c0011; }
+          .cell-text.sentiment-L2 { background: #ffe7e3; color: #820014; }
+          .cell-text.sentiment-L3 { background: #ffccc7; color: #a8071a; }
+          .cell-text.sentiment-L4 { background: #f5222d; color: #ffffff; }
+          .cell-text.sentiment-L5 { background: #cf1322; color: #ffffff; }
+          .matrix-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+          .matrix-toolbar .hidden-hint { display: inline-flex; align-items: center; gap: 6px; font-size: calc(12px * var(--font-scale, 1)); color: var(--td-text-color-secondary); margin-left: 4px; }
+          .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: calc(12px * var(--font-scale, 1)); color: var(--td-text-color-placeholder); }
+          .toolbar-label { color: var(--td-text-color-secondary); }
+          .matrix-fab { position: absolute; right: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 20; }
           .matrix-table td.cell-date { background: var(--td-brand-color-light, #e6f7ff); font-weight: 500; position: sticky; left: 0; z-index: 5; min-width: 90px; width: 90px; }
           .matrix-table .date-text { font-size: calc(12px * var(--font-scale, 1)); color: var(--td-text-color-primary, #333); font-variant-numeric: tabular-nums; }
           .matrix-table .date-week { font-size: calc(10px * var(--font-scale, 1)); margin-left: 4px; opacity: 0.7; }
@@ -785,7 +784,8 @@ export function SectorEffectPage() {
           .matrix-table tbody tr.row-editable:hover { outline: 2px solid var(--td-brand-color, #0052d9); outline-offset: -2px; }
           .matrix-table .cell-text { font-size: calc(12.5px * var(--font-scale, 1)); font-weight: 500; cursor: default; display: inline-block; padding: 2px 8px; border-radius: 3px; line-height: 1.6; transition: transform 0.15s ease; }
           .matrix-table .cell-text:hover { transform: scale(1.06); }
-          .merge-badge { color: #b06b00; font-weight: 700; font-size: calc(11px * var(--font-scale, 1)); margin-left: 2px; }
+          .merge-badge { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; border-radius: 50%; background: #b06b00; color: #fff; font-weight: 700; font-size: 11px; line-height: 1; margin-left: 3px; vertical-align: super; cursor: help; }
+          .merge-badge::after { content: '+'; }
           .matrix-table .month-header-row td { background: linear-gradient(90deg, #fafafa 0%, #f0f0f0 100%); border: none; border-bottom: 2px solid var(--td-component-stroke, #e7e7e7); padding: 6px 12px; text-align: left; font-size: calc(13px * var(--font-scale, 1)); height: auto; color: var(--td-text-color-primary, #333); }
           .matrix-table .month-note { font-weight: 400; color: var(--td-text-color-secondary, #666); font-size: calc(12px * var(--font-scale, 1)); }
           .matrix-table .collapse-row td { text-align: center; font-size: calc(12px * var(--font-scale, 1)); letter-spacing: 0.3px; height: 28px; cursor: pointer; }
@@ -794,6 +794,27 @@ export function SectorEffectPage() {
           .col-menu-item { padding: 9px 14px; font-size: calc(13px * var(--font-scale, 1)); color: var(--td-text-color-primary, #333); cursor: pointer; }
           .col-menu-item:hover { background: var(--td-bg-color-container-hover, #f5f5f5); }
           .col-menu-item.danger { color: var(--td-error-color, #e02020); }
+          /* ===== 深色模式美化 ===== */
+          html.dark .matrix-table thead th { background: #1f1f1f; color: rgba(255,255,255,0.92); border-color: #333; }
+          html.dark .matrix-table thead th.col-date { background: #181818; color: #d0d0d0; }
+          html.dark .matrix-table tbody td { border-color: #303030; color: rgba(255,255,255,0.85); }
+          html.dark .matrix-table td.sector-cell.empty { background: #181818 !important; }
+          html.dark .matrix-table td.cell-date { background: #181818; color: #d0d0d0; }
+          html.dark .matrix-table tbody tr:hover { background: #242424; }
+          html.dark .matrix-table .cell-text.sentiment-0 { color: rgba(255,255,255,0.9); }
+          html.dark .matrix-table .cell-text.sentiment-L1 { background: rgba(207,34,34,0.22); color: #ffffff; }
+          html.dark .matrix-table .cell-text.sentiment-L2 { background: rgba(207,34,34,0.38); color: #ffffff; }
+          html.dark .matrix-table .cell-text.sentiment-L3 { background: rgba(207,34,34,0.55); color: #ffffff; }
+          html.dark .matrix-table .cell-text.sentiment-L4 { background: rgba(207,34,34,0.74); color: #ffffff; }
+          html.dark .matrix-table .cell-text.sentiment-L5 { background: rgba(207,34,34,0.92); color: #ffffff; }
+          html.dark .matrix-table .month-header-row td { background: linear-gradient(90deg,#222,#1a1a1a); border-bottom-color: #333; color: #e0e0e0; }
+          html.dark .matrix-table td.rest-cell, html.dark .matrix-table .collapse-cell { background: #161616 !important; color: #9a9a9a !important; }
+          html.dark .matrix-table .collapse-row td { color: #9a9a9a; }
+          html.dark .matrix-fab .t-button { background: #2a2a2a; border-color: #3a3a3a; color: #e0e0e0; }
+          html.dark .col-menu { background: #1f1f1f; border-color: #333; }
+          html.dark .col-menu-item { color: #e0e0e0; }
+          html.dark .col-menu-item:hover { background: #2a2a2a; }
+          html.dark .matrix-table tbody tr.row-editable:hover { outline-color: var(--td-brand-color, #0052d9); }
           @media (max-width: 768px) {
             .matrix-table { font-size: calc(11px * var(--font-scale, 1)); min-width: max(100%, ${colCount * 80 + 90}px); }
             .matrix-table td { min-width: 70px; padding: 2px 2px; height: 28px; }
