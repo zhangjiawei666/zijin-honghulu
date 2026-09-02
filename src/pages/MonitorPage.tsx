@@ -2,7 +2,7 @@ import { useState } from 'react';
 import {
   Card, Button, Input, Tag, Switch, MessagePlugin, Empty, Tooltip, Table, Dialog, Textarea,
 } from 'tdesign-react';
-import { AddIcon, DeleteIcon, RefreshIcon, UploadIcon } from 'tdesign-icons-react';
+import { AddIcon, DeleteIcon, RefreshIcon, UploadIcon, ClearIcon } from 'tdesign-icons-react';
 import { useMonitor, MonitorStatus, WatchItem, MonitorRun, BuySignal } from '../hooks/useMonitor';
 
 // ============= 状态卡片 =============
@@ -389,7 +389,7 @@ function WatchlistCard({ watchlist, loading, onAdd, onRemove, onBatchImport }: {
 
 // ============= 买点信号 =============
 
-function SignalsCard({ signals }: { signals: BuySignal[] }) {
+function SignalsCard({ signals, onClear }: { signals: BuySignal[]; onClear: () => void }) {
   const columns = [
     { colKey: 'time', title: '时间', width: 150, cell: ({ row }: any) => formatTime(row.created_at) },
     { colKey: 'name', title: '股票', width: 130, cell: ({ row }: any) => (
@@ -413,7 +413,23 @@ function SignalsCard({ signals }: { signals: BuySignal[] }) {
   ];
 
   return (
-    <Card title="买点信号提醒" className="monitor-card">
+    <Card
+      title={
+        <div className="flex items-center justify-between gap-3">
+          <span>买点信号提醒（{signals.length}）</span>
+          <Button
+            size="small"
+            variant="outline"
+            icon={<ClearIcon />}
+            onClick={onClear}
+            disabled={signals.length === 0}
+          >
+            一键清除弹窗
+          </Button>
+        </div>
+      }
+      className="monitor-card"
+    >
       {signals.length === 0 ? (
         <Empty description="暂无买点信号。出现买点时，页面会自动弹窗提醒您" />
       ) : (
@@ -482,7 +498,7 @@ function formatTime(iso: string | null): string {
 // ============= 页面 =============
 
 export function MonitorPage() {
-  const { status, watchlist, runs, signals, loading, triggerRun, toggleMonitor, addWatchItem, batchAddWatchItems, removeWatchItem } = useMonitor();
+  const { status, watchlist, runs, signals, loading, triggerRun, toggleMonitor, addWatchItem, batchAddWatchItems, removeWatchItem, clearAlerts } = useMonitor();
 
   return (
     <div className="monitor-page">
@@ -510,7 +526,10 @@ export function MonitorPage() {
           onBatchImport={batchAddWatchItems}
         />
 
-        <SignalsCard signals={signals} />
+        <SignalsCard signals={signals} onClear={() => {
+          clearAlerts();
+          MessagePlugin.success('已清除当前弹窗和页面买点提醒');
+        }} />
         <RunsCard runs={runs} />
       </div>
     </div>

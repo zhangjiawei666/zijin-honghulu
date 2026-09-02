@@ -205,6 +205,12 @@ export function useMonitor(options: UseMonitorOptions = {}) {
     return data;
   }, []);
 
+  // 清除当前已显示的买点提醒，并同步清空页面信号列表。
+  const clearAlerts = useCallback(() => {
+    setSignals([]);
+    window.dispatchEvent(new CustomEvent('monitor-clear-alerts'));
+  }, []);
+
   return {
     status,
     watchlist,
@@ -212,6 +218,7 @@ export function useMonitor(options: UseMonitorOptions = {}) {
     signals,
     loading,
     refresh,
+    clearAlerts,
     addWatchItem,
     batchAddWatchItems,
     removeWatchItem,

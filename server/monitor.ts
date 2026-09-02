@@ -10,6 +10,7 @@
 import { query } from "@tencent-ai/agent-sdk";
 import { v4 as uuidv4 } from "uuid";
 import type { Response as ExpressResponse } from "express";
+import https from "node:https";
 import * as db from "./db.js";
 
 // ============= 常量 =============
@@ -83,24 +84,68 @@ function timeoutSignal(ms: number): AbortSignal {
   return ctrl.signal;
 }
 
-/** 带超时与重试的 fetch（内置行情通道，提高稳定性） */
+/** 通过 Node https 直接请求，兼容 Electron/Node 运行时缺少 fetch 或 fetch 被网络策略拦截的电脑。 */
+function httpsRequestBuffer(url: string, timeoutMs: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        Accept: '*/*',
+      },
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      res.on('end', () => {
+        const status = res.statusCode || 0;
+        if (status >= 200 && status < 300) resolve(Buffer.concat(chunks));
+        else reject(new Error(`行情接口返回 HTTP ${status}`));
+      });
+    });
+    req.setTimeout(timeoutMs, () => req.destroy(new Error('行情接口请求超时')));
+    req.on('error', reject);
+  });
+}
+
+/** 将 https 原始响应适配为当前调用方使用的 Response 最小接口。 */
+async function requestViaHttps(url: string, timeoutMs: number): Promise<Response> {
+  const body = await httpsRequestBuffer(url, timeoutMs);
+  const response = {
+    ok: true,
+    status: 200,
+    arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+    json: async () => JSON.parse(body.toString('utf8')),
+  };
+  return response as unknown as Response;
+}
+
+/** 带超时与重试的 fetch；优先使用 fetch，失败或运行时不存在时回退到 Node https。 */
 async function fetchWithRetry(url: string, timeoutMs = 15000, retries = 2): Promise<Response> {
   let lastErr: unknown;
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const res = await fetch(url, { signal: timeoutSignal(timeoutMs) });
-      if (res.ok) return res;
-      lastErr = new Error(`HTTP ${res.status}`);
+      if (typeof fetch === 'function') {
+        const res = await fetch(url, { signal: timeoutSignal(timeoutMs) });
+        if (res.ok) return res;
+        lastErr = new Error(`HTTP ${res.status}`);
+      } else {
+        return await requestViaHttps(url, timeoutMs);
+      }
     } catch (err: any) {
       lastErr = err;
-      if (err?.name === "AbortError") {
+      try {
+        // Electron 22 / Node 16 的 global fetch 可能不存在或被代理策略拦截，直接再走 https。
+        return await requestViaHttps(url, timeoutMs);
+      } catch (fallbackErr) {
+        lastErr = fallbackErr;
+      }
+      if (err?.name === 'AbortError') {
         console.warn(`[Monitor] 行情请求超时(第${attempt}次): ${url.slice(0, 80)}...`);
       }
     }
     if (attempt < retries) await new Promise(r => setTimeout(r, 800));
   }
-  if (lastErr && (lastErr as any)?.name === "AbortError") {
-    throw new Error("腾讯行情接口请求超时（已重试，请检查网络）");
+  if (lastErr && (lastErr as any)?.name === 'AbortError') {
+    throw new Error('腾讯行情接口请求超时（已重试，请检查网络）');
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
@@ -139,40 +184,58 @@ export async function fetchRealtimeQuotes(codes: string[]): Promise<Map<string, 
   const result = new Map();
   if (codes.length === 0) return result;
 
-  // 分批请求（每批最多 50 只）
+  // 分批请求（每批最多 50 只）；批量请求失败时逐只回退，避免一台电脑上的
+  // 代理/网络策略阻断整批请求后，所有股票都被判定为“内置取数失败”。
   const batchSize = 50;
   for (let i = 0; i < codes.length; i += batchSize) {
     const batch = codes.slice(i, i + batchSize);
-    const url = "https://qt.gtimg.cn/q=" + batch.join(",");
-    const res = await fetchWithRetry(url);
-    const buf = await res.arrayBuffer();
-    // 腾讯返回 GBK 编码，用 TextDecoder 正确解码股票名称
-    let decoded: string;
+    const parseResponse = async (res: Response) => {
+      const buf = await res.arrayBuffer();
+      let decoded: string;
+      try {
+        decoded = new TextDecoder("gbk").decode(buf);
+      } catch {
+        decoded = new TextDecoder("utf-8").decode(buf);
+      }
+      const matches = decoded.matchAll(/v_(\w+)="([^"]*)"/g);
+      for (const m of matches) {
+        const fields = m[2].split("~");
+        if (fields.length < 5) continue;
+        const marketCode = m[1];
+        const price = parseFloat(fields[3]) || 0;
+        const prevClose = parseFloat(fields[4]) || 0;
+        const parsedPct = parseFloat(fields[32]);
+        const changePct = Number.isFinite(parsedPct)
+          ? parsedPct
+          : (prevClose > 0 ? Number((((price - prevClose) / prevClose) * 100).toFixed(2)) : 0);
+        result.set(marketCode, { name: fields[1], price, changePct });
+      }
+    };
+
     try {
-      decoded = new TextDecoder("gbk").decode(buf);
-    } catch {
-      decoded = new TextDecoder("utf-8").decode(buf);
-    }
-    const matches = decoded.matchAll(/v_(\w+)="([^"]*)"/g);
-    for (const m of matches) {
-      const fields = m[2].split("~");
-      if (fields.length < 5) continue;
-      const marketCode = m[1];
-      // 腾讯字段索引：1=名称 3=当前价 4=昨收 31=涨跌额 32=涨跌幅% 33=最高 34=最低
-      const price = parseFloat(fields[3]) || 0;
-      const prevClose = parseFloat(fields[4]) || 0;
-      const parsedPct = parseFloat(fields[32]);
-      const changePct = Number.isFinite(parsedPct)
-        ? parsedPct
-        : (prevClose > 0 ? Number((((price - prevClose) / prevClose) * 100).toFixed(2)) : 0);
-      result.set(marketCode, {
-        name: fields[1],
-        price,
-        changePct,
-      });
+      await parseResponse(await fetchWithRetry("https://qt.gtimg.cn/q=" + batch.join(",")));
+    } catch (batchError: any) {
+      console.warn(`[Monitor] 批量行情请求失败，改为逐只重试（${batch.length}只）：${batchError?.message || batchError}`);
+      for (const code of batch) {
+        try {
+          await parseResponse(await fetchWithRetry("https://qt.gtimg.cn/q=" + code, 12000, 2));
+        } catch (singleError: any) {
+          console.warn(`[Monitor] 单只行情请求失败 ${code}：${singleError?.message || singleError}`);
+        }
+      }
     }
   }
   return result;
+}
+
+/** 单只股票取数；一只失败不应阻断其它自选股的行情分析。 */
+async function fetchDailyKlineSafe(marketCode: string, days = 70): Promise<KlineBar[]> {
+  try {
+    return await fetchDailyKline(marketCode, days);
+  } catch (err: any) {
+    console.warn(`[Monitor] 日K取数失败 ${marketCode}：${err?.message || err}`);
+    return [];
+  }
 }
 
 /** 获取日 K 线（前复权），返回 [{date, open, close, high, low, volume}] */
@@ -597,14 +660,21 @@ class MonitorService {
   private async checkWithAgent(items: db.WatchItem[]): Promise<db.BuySignal[]> {
     // 1. 复用内置通道取数（实时行情 + 日K + 均线 + 量比），确保 Agent 基于真实数据判断
     const marketCodes = items.map(it => toMarketCode(it.code));
-    const quotes = await fetchRealtimeQuotes(marketCodes);
+    let quotes: Map<string, { name: string; price: number; changePct: number }> = new Map();
+    try {
+      quotes = await fetchRealtimeQuotes(marketCodes);
+    } catch (err: any) {
+      // 实时行情完全失败时不应抛出"内置取数失败"误导用户；Agent 通道直接静默退到 builtin 通道。
+      console.warn(`[Monitor] Agent通道实时行情取数失败, 跳过 Agent 通道: ${err?.message || err}`);
+      return [];
+    }
 
     const dataBlocks: string[] = [];
     for (const item of items) {
       const mc = toMarketCode(item.code);
       const quote = quotes.get(mc);
       try {
-        const bars = await fetchDailyKline(mc, 70);
+        const bars = await fetchDailyKlineSafe(mc, 70);
         if (bars.length < 25) continue;
         const closes = bars.map(b => b.close);
         const lows = bars.map(b => b.low);
@@ -635,7 +705,10 @@ ${recent}`);
       }
     }
     if (dataBlocks.length === 0) {
-      throw new Error("无法获取行情数据（内置取数失败）");
+      // 取数完全为空时不要抛错（避免用户看到"Agent通道: 内置取数失败"的误导提示），
+      // 静默返回空数组，让 builtin 通道给出结果。
+      console.warn(`[Monitor] Agent通道无任何可用行情数据, 跳过 Agent 通道（自选股 ${items.length} 只, 实际行情 ${quotes.size} 只）`);
+      return [];
     }
 
     // 2. 构造提示词：数据已提供，禁止 Agent 再调用工具/联网，只做规则推理
@@ -777,14 +850,23 @@ ${BUY_RULES}
 
   private async checkWithBuiltin(items: db.WatchItem[]): Promise<db.BuySignal[]> {
     const marketCodes = items.map(it => toMarketCode(it.code));
-    const quotes = await fetchRealtimeQuotes(marketCodes);
+    // 整批行情失败时不应直接抛出 — 一只个股也拿不到数据，Agent 通道的"内置取数失败"提示
+    // 容易误导用户。fetchRealtimeQuotes 内部已有批量失败逐只回退，单只全部失败才走这里。
+    let quotes: Map<string, { name: string; price: number; changePct: number }> = new Map();
+    try {
+      quotes = await fetchRealtimeQuotes(marketCodes);
+    } catch (err: any) {
+      console.warn(`[Monitor] 内置通道实时行情完全失败: ${err?.message || err}`);
+      return [];
+    }
     const signals: db.BuySignal[] = [];
 
     for (const item of items) {
       const mc = toMarketCode(item.code);
       const quote = quotes.get(mc);
       try {
-        const bars = await fetchDailyKline(mc, 70);
+        const bars = await fetchDailyKlineSafe(mc, 70);
+        if (bars.length < 25) continue;
         const detected = detectBuySignals(bars);
         for (const sig of detected) {
           signals.push({

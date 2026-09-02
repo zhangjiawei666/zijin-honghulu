@@ -480,8 +480,78 @@ function cleanupGarbageSectors(): number {
   return cleaned;
 }
 
+/**
+ * 清理旧版 08:00 调度遗留的已知日期错位：将被数据源标记为 9/1 的记录迁回 9/1。
+ *
+ * 旧版在 9/2 早上执行时，可能把 9/1 收盘数据写到 9/2。迁移必须依据
+ * substituted_date（数据源实际返回日期）判断，不能依赖当前系统时间窗口；否则用户
+ * 在 9/2 20:00 之后或更晚启动软件时，旧错位记录会永久残留。
+ *
+ * 同时支持两种数据源标记：
+ *   ① 新版 substituted_date='20260901' → 直接迁移；
+ *   ② 老版本 substituted_date 缺失（substituted_date=null/''）→ 用「旧版 08:00 错位窗口」
+ *      作为第二重限制：只有 2026/9/2 20:00（中国标准时间）之前写入的 9/2 记录才允许迁移。
+ *
+ * 目标行 9/1 不存在（数据库是 9/2 当天新建的）时也支持：从 9/2 复制一份并改成 9/1 标签。
+ */
+function repairKnownLegacyDateShift(): boolean {
+  const shifted = db.getSectorEffectByDate('20260902');
+  if (!shifted) return false;
+  if (shifted.day_type !== 'trading') return false;
+
+  let shiftedSectors: Array<{ name: string; count: number }> = [];
+  try {
+    shiftedSectors = JSON.parse(shifted.sectors_json);
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(shiftedSectors) || shiftedSectors.length === 0) return false;
+  if (!String(shifted.source || '').includes('东方财富')) return false;
+
+  // 以数据源实际日期为首要证据。旧版本部分记录没有保存 substituted_date，
+  // 对这类历史遗留记录，再用「旧版 08:00 错位窗口」作为第二重限制：
+  // 只有 2026/9/2 当日 20:00（中国标准时间）之前写入的 9/2 记录才允许迁移。
+  const actualDate = String(shifted.substituted_date || '').replace(/-/g, '');
+  const legacyCutoff = Date.parse('2026-09-02T12:00:00.000Z'); // 中国时间 2026/9/2 20:00
+  const createdAt = Date.parse(String(shifted.created_at || ''));
+  const isLegacyWindow = Number.isFinite(createdAt) && createdAt < legacyCutoff;
+  if (actualDate !== '20260901' && !(actualDate === '' && isLegacyWindow)) {
+    console.warn(`[SectorEffect] 检测到 20260902 有实时数据，但无法确认其属于 20260901（actual=${actualDate || '未知'}，created_at=${shifted.created_at || '未知'}），未自动迁移`);
+    return false;
+  }
+
+  const target = db.getSectorEffectByDate('20260901');
+  let targetSectors: Array<{ name: string; count: number }> = [];
+  if (target) {
+    try { targetSectors = JSON.parse(target.sectors_json); } catch { /* 解析失败按空处理 */ }
+    // 9/1 已被「东方财富」抓取的真实数据覆盖过 → 不重复迁移，避免数据回滚
+    if (String(target.source || '').includes('东方财富')) return false;
+    // 9/1 已有非模板来源的实时数据 → 不重复迁移
+    if (Array.isArray(targetSectors) && targetSectors.length > 0
+        && !String(target.source || '').includes('腾讯文档模板')) return false;
+  }
+
+  // 9/1 不存在 或 9/1 是空白行：把 9/2 的实时数据迁过去
+  const nowIso = new Date().toISOString();
+  db.upsertSectorEffect({
+    date: '20260901',
+    day_type: 'trading',
+    sectors_json: shifted.sectors_json,
+    total_limit_up: shifted.total_limit_up,
+    source: shifted.source,
+    substituted_date: null,
+    created_at: target?.created_at || nowIso,
+    updated_at: nowIso,
+  });
+  db.deleteSectorEffect('20260902');
+  console.warn(`[SectorEffect] 已修正旧版日期错位：20260902 → 20260901（${target ? '覆盖空白行' : '新建缺失行'}，依据数据源实际日期）`);
+  return true;
+}
+
 function ensureHistorySeeded(): void {
   try {
+    const repaired = repairKnownLegacyDateShift();
+    if (repaired) console.log('[SectorEffect] 已完成 9/1 数据归属修复');
     const gc = cleanupGarbageSectors();
     if (gc > 0) console.log(`[SectorEffect] 启动清理：剔除 ${gc} 行照搬脏单元格`);
     const r = importBuiltinHistory(false);

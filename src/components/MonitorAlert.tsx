@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { NotificationPlugin } from 'tdesign-react';
 import { useMonitor, BuySignal } from '../hooks/useMonitor';
 
@@ -29,8 +29,24 @@ function playAlertSound() {
   }
 }
 
+/** 监听行情监控页发出的清除命令，同时关闭页面通知和系统通知。 */
 export function MonitorAlert() {
-  const burstRef = { list: [] as BuySignal[], timer: null as ReturnType<typeof setTimeout> | null };
+  const burstRef = useRef<BuySignal[]>([]);
+  const burstTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const systemNotificationsRef = useRef<Notification[]>([]);
+
+  const clearAlerts = () => {
+    NotificationPlugin.closeAll();
+    for (const notification of systemNotificationsRef.current) {
+      try { notification.close(); } catch { /* 浏览器可能已自动关闭 */ }
+    }
+    systemNotificationsRef.current = [];
+    burstRef.current = [];
+    if (burstTimerRef.current) {
+      clearTimeout(burstTimerRef.current);
+      burstTimerRef.current = null;
+    }
+  };
 
   const handleBuySignal = (signal: BuySignal) => {
     NotificationPlugin.warning({
@@ -41,20 +57,24 @@ export function MonitorAlert() {
       closeBtn: true,
     });
 
-    burstRef.list.push(signal);
-    if (burstRef.timer) return;
-    burstRef.timer = setTimeout(() => {
-      burstRef.timer = null;
-      burstRef.list = [];
+    burstRef.current.push(signal);
+    if (burstTimerRef.current) return;
+    burstTimerRef.current = setTimeout(() => {
+      burstTimerRef.current = null;
+      burstRef.current = [];
       playAlertSound();
     }, 2500);
 
     try {
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-        new Notification(`买点提醒：${signal.name}（${signal.code}）`, {
+        const notification = new Notification(`买点提醒：${signal.name}（${signal.code}）`, {
           body: `${signal.signal_type}｜${signal.reason}`,
           tag: `buy-${signal.code}-${Date.now()}`,
           icon: '/logo.png',
+        });
+        systemNotificationsRef.current.push(notification);
+        notification.addEventListener('close', () => {
+          systemNotificationsRef.current = systemNotificationsRef.current.filter(item => item !== notification);
         });
       }
     } catch (error) {
@@ -68,6 +88,15 @@ export function MonitorAlert() {
       if (info.signalCount > 0) console.log('[MonitorAlert] 发现买点:', info.summary);
     },
   });
+
+  useEffect(() => {
+    const onClear = () => clearAlerts();
+    window.addEventListener('monitor-clear-alerts', onClear);
+    return () => {
+      window.removeEventListener('monitor-clear-alerts', onClear);
+      if (burstTimerRef.current) clearTimeout(burstTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     const requestPermission = () => {
