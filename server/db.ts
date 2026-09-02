@@ -99,7 +99,34 @@ db.exec(`
     updated_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_sector_effect_date ON sector_effect_daily(date DESC);
+
+  -- 应用元信息（key-value）。用于记录内置历史基线的同步版本，
+  -- 使新版基线发布后能自动重新导入，而不用用户手工点「强制导入」。
+  CREATE TABLE IF NOT EXISTS app_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `);
+
+// ============= 应用元信息（key-value）=============
+
+/** 读取元信息，不存在返回 null */
+export function getMeta(key: string): string | null {
+  const stmt = db.prepare('SELECT value FROM app_meta WHERE key = ?');
+  const row = stmt.get(key) as { value: string } | undefined;
+  return row ? row.value : null;
+}
+
+/** 写入元信息（UPSERT） */
+export function setMeta(key: string, value: string): void {
+  const stmt = db.prepare(`
+    INSERT INTO app_meta (key, value, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = ?
+  `);
+  const now = new Date().toISOString();
+  stmt.run(key, value, now, value, now);
+}
 
 // 迁移：为早期版本创建的表补上 day_type 列
 try {

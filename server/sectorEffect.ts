@@ -1,7 +1,11 @@
 import express from "express";
 import https from "node:https";
 import * as db from "./db.js";
-import { SECTOR_EFFECT_HISTORY, type SectorDayType } from "./sectorEffectHistory.js";
+import {
+  SECTOR_EFFECT_HISTORY,
+  HISTORY_SYNC_VERSION,
+  type SectorDayType,
+} from "./sectorEffectHistory.js";
 
 /**
  * 板块效应：按交易日统计 A 股涨停股，归集到行业板块，以矩阵表格展示。
@@ -19,10 +23,28 @@ import { SECTOR_EFFECT_HISTORY, type SectorDayType } from "./sectorEffectHistory
  */
 
 const EM_UT = "7eea3edcaed734bea9cbfc24409ed989";
-const SOURCE = "东方财富涨停板行情（涨停池）";
+/** 实时抓取来源名称（同花顺概念口径；回退时为东方财富行业口径） */
+const SOURCE = "同花顺涨停板行情（板块TOP，概念口径）";
+const SOURCE_EM_FALLBACK = "东方财富涨停板行情（涨停池，行业口径）";
 
 /** 手动录入数据的来源标记。含此标记的日期属于用户资产，不会被自动抓取或模板导入覆盖。 */
 const MANUAL_SOURCE = "手动录入";
+
+/**
+ * 实时抓取的数据源。
+ *   - "tonghuashun"：同花顺 data.10jqka.com.cn，概念口径，**支持历史日期**，直接返回板块统计（当前默认）
+ *   - "eastmoney" ：东方财富涨停池，行业口径，需按个股 hybk 自行聚合（保留为回退）
+ * 同花顺取数失败时会自动回退到东方财富。
+ */
+const DATA_SOURCE: "tonghuashun" | "eastmoney" = "tonghuashun";
+
+/** 数据源抓取结果：板块统计 + 真实涨停总数 */
+interface SectorFetchResult {
+  date: string;                                  // 数据源实际日期
+  sectors: Array<{ name: string; count: number }>; // 按 count 降序
+  totalLimitUp: number;                          // 全市场涨停总数（非各板块之和）
+  source: string;                                // 实际生效的数据源名称
+}
 
 /** 矩阵每行展示的板块列数上限，与用户腾讯文档模板「板块1~板块17」的列数对齐 */
 const MAX_SECTOR_COLS = 17;
@@ -38,6 +60,14 @@ function isProtectedSource(source: unknown): boolean {
   const s = String(source || "");
   return s.includes(MANUAL_SOURCE) || s.includes("腾讯文档");
 }
+
+/** 判断某行是否为「用户手动录入」（用于基线重同步时决定能否覆盖） */
+function isManualEntry(source: unknown): boolean {
+  return String(source || "").includes(MANUAL_SOURCE);
+}
+
+/** 元信息 key：已导入的内置基线版本 */
+const META_HISTORY_VERSION = "history_sync_version";
 
 interface LimitUpStock {
   code: string;
@@ -76,13 +106,30 @@ interface SectorCell {
 /** 展示用的日期类型：在存储的三种类型之外，额外表达"今天尚未收盘" */
 type DisplayDayType = SectorDayType | "today";
 
-// ============= 东财数据源工具函数 =============
+// ============= 数据源工具函数 =============
 
-function requestJson(url: string, timeoutMs = 15000): Promise<any> {
+/** 通用 UA（反爬需要） */
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+function requestJson(
+  url: string,
+  timeoutMs = 15000,
+  headers?: Record<string, string>,
+): Promise<any> {
+  const __t0 = Date.now();
+  if (process.env.SECTOR_DEBUG === '1') {
+    console.log(`[SectorEffect][debug] → ${url.slice(0, 90)} (timeoutMs=${timeoutMs})`);
+  }
   return new Promise((resolve, reject) => {
     const req = https.get(
       url,
-      { headers: { "User-Agent": "Mozilla/5.0", Referer: "https://quote.eastmoney.com/" } },
+      {
+        headers: headers || {
+          "User-Agent": BROWSER_UA,
+          Referer: "https://quote.eastmoney.com/",
+        },
+      },
       response => {
         const chunks: Buffer[] = [];
         response.on("data", chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
@@ -97,8 +144,28 @@ function requestJson(url: string, timeoutMs = 15000): Promise<any> {
         });
       },
     );
-    req.setTimeout(timeoutMs, () => req.destroy(new Error("请求数据源超时")));
-    req.on("error", reject);
+    req.setTimeout(timeoutMs, () => {
+      if (process.env.SECTOR_DEBUG === '1') {
+        console.log(`[SectorEffect][debug] ✗ TIMEOUT after ${Date.now() - __t0}ms (set=${timeoutMs})`);
+      }
+      req.destroy(new Error("请求数据源超时"));
+    });
+    req.on("error", (err) => {
+      if (process.env.SECTOR_DEBUG === '1') {
+        console.log(`[SectorEffect][debug] ✗ ERR after ${Date.now() - __t0}ms: ${(err as Error)?.message}`);
+      }
+      reject(err);
+    });
+    req.on("response", () => {
+      if (process.env.SECTOR_DEBUG === '1') {
+        console.log(`[SectorEffect][debug] ← response headers at ${Date.now() - __t0}ms`);
+      }
+    });
+    req.on("close", () => {
+      if (process.env.SECTOR_DEBUG === '1') {
+        console.log(`[SectorEffect][debug] ← close at ${Date.now() - __t0}ms`);
+      }
+    });
   });
 }
 
@@ -162,7 +229,9 @@ function fmtDateDisplay(token: string): string {
   return `${y}/${m}/${d}`;
 }
 
-async function fetchLimitUpPool(dateToken: string): Promise<{ date: string; stocks: LimitUpStock[] }> {
+// ---------- 东方财富（行业口径，备用回退） ----------
+
+async function fetchEastmoneyPool(dateToken: string): Promise<{ date: string; stocks: LimitUpStock[] }> {
   const url = `https://push2ex.eastmoney.com/getTopicZTPool?ut=${EM_UT}&dpt=wz.ztzt`
     + `&Pageindex=0&pagesize=300&sort=fbt%3Aasc&date=${dateToken}&_=1`;
   const json = await requestJson(url);
@@ -181,6 +250,178 @@ async function fetchLimitUpPool(dateToken: string): Promise<{ date: string; stoc
     });
   }
   return { date: String(json?.data?.qdate || dateToken), stocks };
+}
+
+// ---------- 同花顺（概念口径，主数据源） ----------
+
+/** 同花顺 data.10jqka.com.cn 的反爬请求头：必须带 UA + Referer */
+const THS_HEADERS = {
+  "User-Agent": BROWSER_UA,
+  Referer: "https://data.10jqka.com.cn/",
+  Accept: "application/json, text/javascript, */*; q=0.01",
+  "Accept-Language": "zh-CN,zh;q=0.9",
+};
+
+/**
+ * 同花顺板块名 → 用户腾讯文档口径的归并表。
+ *
+ * 目的：同花顺给的是概念名（如「机器人概念」），腾讯文档历史用的是简写（「机器人」），
+ * 若不归并，同一个概念会在矩阵表里占两列，破坏「同一板块固定在同一列」的展示规则。
+ *
+ * 只收录语义明确、无歧义的同义词；无法确定的一律保留同花顺原名，绝不臆造归类。
+ */
+const THS_SECTOR_ALIAS: Record<string, string> = {
+  机器人概念: "机器人",
+  人形机器人: "机器人",
+  芯片概念: "半导体",
+  存储芯片: "半导体",
+  光刻机: "半导体",
+  人工智能: "AI应用",
+  算力概念: "算力",
+  数据中心: "算力",
+  液冷: "液冷服务器",
+  "AI液冷散热": "液冷服务器",
+  电池: "锂电池",
+  电池产业链: "锂电池",
+  固态电池: "锂电池",
+  航天: "商业航天",
+  航空发动机: "商业航天",
+  大飞机: "商业航天",
+  有色: "有色金属",
+  稀有金属: "有色金属",
+  小金属: "有色金属",
+  地产: "房地产",
+  房地产开发: "房地产",
+  农牧饲渔: "农业",
+  猪肉概念: "农业",
+  农牧: "农业",
+  中字头: "央企国企改革",
+  央国企: "央企国企改革",
+  光模块: "光通信",
+  光纤概念: "光通信",
+  CPO: "光通信",
+  电力设备: "电力",
+  绿色电力: "电力",
+  虚拟电厂: "智能电网",
+  特高压: "智能电网",
+};
+
+/** 归并同花顺板块名到腾讯文档口径 */
+function normalizeThsSector(raw: string): string {
+  const base = String(raw || "").trim();
+  if (!base) return "未标注板块";
+  return THS_SECTOR_ALIAS[base] || base;
+}
+
+/**
+ * 抓取同花顺「板块 TOP」。
+ *
+ * 优势（实测 2026-09-02）：
+ *   - 直接返回「板块名 + limit_up_num」，无需自己按个股聚合；
+ *   - **支持历史日期**（东财不支持，传历史日期会被回写成最近交易日）；
+ *   - 概念口径，与用户腾讯文档的板块命名同一层级。
+ * 限制：只返回 TOP 20 板块（表格最多展示 17 列，够用）。
+ */
+async function fetchTonghuashunBlocks(dateToken: string): Promise<SectorFetchResult> {
+  // 1) 板块统计（TOP 20）。同花顺对当日请求响应较慢（含个股明细，约 100KB+），
+  //    超时给到 30 秒，并对网络抖动做一次重试。
+  const blockUrl =
+    `https://data.10jqka.com.cn/dataapi/limit_up/block_top`
+    + `?filter=HS,GEM2STAR&date=${dateToken}`;
+
+  let bj: any = null;
+  let lastErr: unknown = null;
+  // 最多 3 次：已知 Node 进程内首次 HTTPS 连接（DNS+TCP+TLS）约 5 秒，
+  // 且 request.setTimeout 在连接建立阶段会提前触发，需要多给重试机会。
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      bj = await requestJson(blockUrl, 30000, THS_HEADERS);
+      break;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < 3) {
+        console.warn(
+          `[SectorEffect] 同花顺连接较慢，第 ${attempt} 次重试（${dateToken}）`,
+        );
+        await new Promise(r => setTimeout(r, 800 * attempt));
+      }
+    }
+  }
+  if (!bj) throw lastErr instanceof Error ? lastErr : new Error("同花顺板块数据请求失败");
+
+  const list: any[] = Array.isArray(bj?.data) ? bj.data : [];
+
+  /**
+   * 别名归并后可能出现同名板块（如「人工智能」与「AI应用」都归并为「AI应用」）。
+   * 这类同义板块统计的是同一批涨停股，若相加会夸大数量，因此**保留最大值**，
+   * 符合 sector-limitup-daily「同一板块内必须去重」的要求。
+   */
+  const merged = new Map<string, number>();
+  for (const x of list) {
+    const name = normalizeThsSector(String(x?.name || ""));
+    const count = Number(x?.limit_up_num) || 0;
+    if (!name || count <= 0) continue;
+    const prev = merged.get(name);
+    if (prev === undefined || count > prev) merged.set(name, count);
+  }
+
+  const sectors: Array<{ name: string; count: number }> = [...merged.entries()]
+    .map(([name, count]) => ({ name, count }));
+  sectors.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "zh-Hans-CN"));
+
+  // 2) 全市场涨停总数：取涨停池分页的 total（各板块 limit_up_num 之和会重复计数）
+  let totalLimitUp = 0;
+  try {
+    const poolUrl =
+      `https://data.10jqka.com.cn/dataapi/limit_up/limit_up_pool`
+      + `?page=1&limit=1&field=199112,10,9001,330323,330324,330325,9002,330329,133971,133970,1968584,3475914,9003,9004`
+      + `&filter=HS,GEM2STAR&order_field=330324&order_type=0&date=${dateToken}&_=1`;
+    const pj = await requestJson(poolUrl, 25000, THS_HEADERS);
+    totalLimitUp = Number(pj?.data?.page?.total) || 0;
+  } catch {
+    // 总数取不到不影响板块数据，置 0
+  }
+
+  return { date: dateToken, sectors, totalLimitUp, source: SOURCE };
+}
+
+/**
+ * 统一入口：按数据源抓取某日的「板块统计 + 真实涨停总数」。
+ *
+ * 返回 totalLimitUp 而非让调用方用 sum(板块count) 代替 —— 同一只股票可归入多个板块，
+ * 各板块 limit_up_num 相加会重复计数，必须用数据源给出的全市场涨停总数。
+ */
+async function fetchSectorStats(dateToken: string): Promise<SectorFetchResult> {
+  if (DATA_SOURCE === "tonghuashun") {
+    try {
+      return await fetchTonghuashunBlocks(dateToken);
+    } catch (err: any) {
+      // 同花顺不可用 → 回退东方财富，保证功能不中断
+      console.warn(
+        `[SectorEffect] 同花顺取数失败（${err?.message || err}），回退东方财富`,
+      );
+    }
+  }
+  const em = await fetchEastmoneyPool(dateToken);
+
+  /**
+   * 关键防护：东财不支持历史日期——传入历史日期时，它返回的 qdate 会被回写成
+   * 「最近交易日」。若照单全收，就会把最近交易日的数据写到别的日期上，
+   * 造成日期错乱（实测：请求 20260901 返回 20260902 的数据）。
+   * 这里直接在回退路径上拒绝，避免污染正确日期的数据。
+   */
+  if (em.stocks.length > 0 && em.date !== dateToken) {
+    throw new Error(
+      `东方财富不支持 ${dateToken} 的历史数据（数据源回写为 ${em.date}），已放弃写入以避免日期错乱`,
+    );
+  }
+
+  return {
+    date: em.date,
+    sectors: aggregate(em.stocks),
+    totalLimitUp: em.stocks.length,
+    source: SOURCE_EM_FALLBACK,
+  };
 }
 
 function aggregate(stocks: LimitUpStock[]): Array<{ name: string; count: number }> {
@@ -294,15 +535,15 @@ async function fetchAndStore(dateToken: string, opts?: { force?: boolean }): Pro
   /** 因保护模板历史数据而跳过写入 */
   skipped?: boolean;
 }> {
-  let result = await fetchLimitUpPool(dateToken);
+  let result = await fetchSectorStats(dateToken);
   let substitutedDate: string | null = null;
 
   // 非交易日或尚未收盘：向前回溯
-  if (result.stocks.length === 0) {
+  if (result.sectors.length === 0) {
     for (let i = 1; i <= 7; i += 1) {
       const candidate = shiftDays(dateToken, -i);
-      const probe = await fetchLimitUpPool(candidate);
-      if (probe.stocks.length > 0) {
+      const probe = await fetchSectorStats(candidate);
+      if (probe.sectors.length > 0) {
         result = probe;
         substitutedDate = probe.date;
         break;
@@ -312,7 +553,7 @@ async function fetchAndStore(dateToken: string, opts?: { force?: boolean }): Pro
 
   if (!substitutedDate && result.date !== dateToken) substitutedDate = result.date;
 
-  const sectors = aggregate(result.stocks);
+  const sectors = result.sectors;
 
   /**
    * 关键防护：抓取结果为空时绝不写库。
@@ -320,10 +561,12 @@ async function fetchAndStore(dateToken: string, opts?: { force?: boolean }): Pro
    * 东财涨停池不支持历史日期查询——传入任意历史日期，数据源都会把 qdate 回写成
    * 「最近交易日」并返回空池。若照常 UPSERT，就会用空数据覆盖掉该最近交易日已有的
    * 有效记录（实测：查询 20260315 后，20260831 的真实数据被清空）。
+   *
+   * 同花顺 block_top 支持历史日期，但周末/节假日同样返回空，此防护依旧必要。
    */
   if (sectors.length === 0) {
     console.warn(
-      `[SectorEffect] 请求 ${dateToken} 未取到有效涨停数据（数据源回写 qdate=${result.date}），跳过写入以避免覆盖已有记录`,
+      `[SectorEffect] 请求 ${dateToken} 未取到有效涨停数据（数据源日期=${result.date}），跳过写入以避免覆盖已有记录`,
     );
     return {
       date: result.date,
@@ -363,25 +606,29 @@ async function fetchAndStore(dateToken: string, opts?: { force?: boolean }): Pro
   // 写入数据库（UPSERT）
   // day_type 固定为 trading：能抓到涨停池数据说明当天确实开市。
   // 若模板里该日被标成休市但实际有交易，这里会把它纠正为交易日。
+  // total_limit_up 用数据源给出的全市场涨停总数，而非各板块之和（会重复计数）。
   db.upsertSectorEffect({
     date: result.date,
     day_type: "trading",
     sectors_json: JSON.stringify(sectors),
-    total_limit_up: result.stocks.length,
-    source: SOURCE,
+    total_limit_up: result.totalLimitUp,
+    source: result.source,
     substituted_date: substitutedDate,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   });
 
-  console.log(`[SectorEffect] 存储 ${result.date} 完成: ${result.stocks.length}只涨停, ${sectors.length}个板块`);
+  console.log(
+    `[SectorEffect] 存储 ${result.date} 完成: ${result.totalLimitUp}只涨停, ${sectors.length}个板块`
+    + `（数据源：${result.source}）`,
+  );
 
   return {
     date: result.date,
     requestedDate: dateToken,
     substitutedDate,
     sectors,
-    totalLimitUp: result.stocks.length,
+    totalLimitUp: result.totalLimitUp,
   };
 }
 
@@ -393,15 +640,21 @@ const HISTORY_SOURCE = "腾讯文档模板·2026板块效应（概念板块口�
  * 导入内置历史数据（2026 年腾讯文档模板）。
  *
  * 背景：东财涨停池接口不支持历史日期查询——传入任意历史日期都会被数据源强制替换为
- * 最近交易日，更早的日期返回空池，因此历史数据无法实时回填，只能以内置文件作为基线。
+ * 最近交易日，更早的日期返回空池。同花顺 block_top 虽支持历史日期，但用户模板里的
+ * 概念口径是手工整理的结果，仍以内置文件作为历史基线最可靠。
  *
  * 策略：
  *   - 默认只补齐本地缺失的日期，不覆盖已有记录（保留用户后续抓取/修正的数据）；
  *   - force=true 时用模板数据覆盖同日期记录。
+ *   - resync=true 时（基线版本变更）覆盖非手动录入的记录。
  *
  * @returns 本次新增条数、覆盖条数、跳过的无效行数
  */
-function importBuiltinHistory(force = false): { added: number; updated: number; total: number } {
+/**
+ * @param force  强制覆盖一切（含用户手动录入的行）—— 仅用于用户在界面显式「强制导入」。
+ * @param resync 基线版本更新后的自动重同步：覆盖非手动录入的行，手动数据仍受保护。
+ */
+function importBuiltinHistory(force = false, resync = false): { added: number; updated: number; total: number } {
   let added = 0;
   let updated = 0;
 
@@ -422,9 +675,9 @@ function importBuiltinHistory(force = false): { added: number; updated: number; 
     // （如照搬腾讯文档列号 "1/2/3"、备注"低吸"等），也避免已入库旧脏数据残留。
     // 依据 sector-limitup-daily skill：周末/节假日不写入当日虚构数据。
     //
-    // 例外：用户手动录入过该日数据（哪怕是休市日）时跳过，尊重用户修正。
+    // 例外：非强制模式下，用户手动录入过该日数据（哪怕是休市日）时跳过，尊重用户修正。
     if (dayType !== "trading") {
-      if (existing && isProtectedSource(existing.source) && !force) {
+      if (existing && !force && !(resync && !isManualEntry(existing.source))) {
         continue;
       }
       db.upsertSectorEffect({
@@ -441,8 +694,11 @@ function importBuiltinHistory(force = false): { added: number; updated: number; 
       continue;
     }
 
-    // 非强制模式下，已存在的交易日保留现有数据（可能是实时抓取更新的，也可能是用户手动录入的）
-    if (existing && !force) continue;
+    // 已存在时的覆盖策略：
+    //   force  → 覆盖一切（用户显式强制导入）
+    //   resync → 覆盖非手动录入的数据（基线版本更新后的自动重同步）
+    //   默认   → 保留现有数据（仅补齐缺失日期）
+    if (existing && !force && !(resync && !isManualEntry(existing.source))) continue;
 
     db.upsertSectorEffect({
       date: dateToken,
@@ -575,21 +831,42 @@ function repairKnownLegacyDateShift(): boolean {
 
 function ensureHistorySeeded(): void {
   try {
-    const repaired = repairKnownLegacyDateShift();
-    if (repaired) console.log('[SectorEffect] 已完成 9/1 数据归属修复');
-    const gc = cleanupGarbageSectors();
-    if (gc > 0) console.log(`[SectorEffect] 启动清理：剔除 ${gc} 行照搬脏单元格`);
-    const r = importBuiltinHistory(false);
-    if (r.added > 0) {
+    // 1) 基线版本检测：腾讯文档重新同步后 HISTORY_SYNC_VERSION 会变化，
+    //    此时自动重同步（覆盖非手动录入的行），让用户更新软件就能拿到最新数据。
+    let resync = false;
+    const savedVersion = db.getMeta(META_HISTORY_VERSION);
+    if (savedVersion !== HISTORY_SYNC_VERSION) {
+      resync = savedVersion !== null; // 首次运行不算 resync，走普通补齐
+      console.log(
+        `[SectorEffect] 内置基线版本变更：${savedVersion ?? '(首次)'} → ${HISTORY_SYNC_VERSION}`
+        + (resync ? '，将自动重同步（手动录入的行保留）' : ''),
+      );
+    }
+
+    // 2) 导入 / 重同步内置基线。
+    //    注意：必须先导入基线再跑 9/1 迁移 —— 2026-09-02 的腾讯文档基线已包含 9/1 真实数据，
+    //    先导入可让迁移逻辑识别到 9/1 已有数据而跳过，避免把 9/2 的东财数据误搬到 9/1。
+    const r = importBuiltinHistory(false, resync);
+    db.setMeta(META_HISTORY_VERSION, HISTORY_SYNC_VERSION);
+    if (r.added > 0 || r.updated > 0) {
       const trading = SECTOR_EFFECT_HISTORY.filter(x => x.day_type === 'trading').length;
       const resting = SECTOR_EFFECT_HISTORY.length - trading;
       console.log(
-        `[SectorEffect] 补齐内置历史基线：新增 ${r.added} 天`
-        + `（模板共 ${r.total} 行：交易日 ${trading} 天、休市日 ${resting} 天）`
+        `[SectorEffect] 内置历史基线${resync ? '已重同步' : '已补齐'}：`
+        + `新增 ${r.added} 天、更新 ${r.updated} 天`
+        + `（模板共 ${r.total} 行：交易日 ${trading} 天、休市日 ${resting} 天）`,
       );
     } else {
       console.log("[SectorEffect] 内置历史基线已完整，无需补齐");
     }
+
+    // 3) 旧版日期错位迁移（一次性历史修复，基线已含 9/1 数据时会自动跳过）
+    const repaired = repairKnownLegacyDateShift();
+    if (repaired) console.log('[SectorEffect] 已完成 9/1 数据归属修复');
+
+    // 4) 清理照搬腾讯文档产生的脏单元格
+    const gc = cleanupGarbageSectors();
+    if (gc > 0) console.log(`[SectorEffect] 启动清理：剔除 ${gc} 行照搬脏单元格`);
   } catch (err: any) {
     console.error("[SectorEffect] 导入历史基线失败:", err?.message || err);
   }
