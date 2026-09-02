@@ -513,7 +513,7 @@ export function SectorEffectPage() {
         <Tooltip content={tip} showArrow>
           <span className={`cell-text ${cls}`}>
             {column.label}{count}
-            {mergedParts && <span className="merge-badge" title="归并板块：悬停查看子板块明细" />}
+            {mergedParts && <span className="merge-badge" title="归并板块：悬停查看子板块明细">!</span>}
           </span>
         </Tooltip>
       </td>
@@ -554,6 +554,11 @@ export function SectorEffectPage() {
         }
         result.push({ type: 'data', row, index: i });
       } else {
+        // 节假日不折叠，始终显式保留并在表格中填写「节假日休市」
+        if (row.dayType === 'holiday') {
+          result.push({ type: 'data', row, index: i });
+          continue;
+        }
         if (collapseStart < 0) { collapseStart = i; collapseType = row.dayType; }
         else if (collapseType !== row.dayType) {
           if (i - collapseStart >= COLLAPSE_THRESHOLD) {
@@ -665,7 +670,7 @@ export function SectorEffectPage() {
                             <span className="date-text" style={{ color: restStyle.fg }}>{row.date}</span>
                             <span className="date-week" style={{ color: restStyle.fg }}>{weekdayOf(row.date)}</span>
                           </td>
-                          <td className="rest-cell" colSpan={visibleColumns.length} style={{ backgroundColor: restStyle.bg, color: restStyle.fg }}>
+                          <td className={row.dayType === 'holiday' ? 'rest-cell holiday-rest' : 'rest-cell'} colSpan={visibleColumns.length} style={{ backgroundColor: restStyle.bg, color: restStyle.fg }}>
                             {restStyle.label}
                             {row.dayType === 'today' && ' · 今日待更新，今晚 20:00 更新'}
                             {editMode && <span style={{ marginLeft: 8, opacity: 0.75 }}>· 点击编辑</span>}
@@ -694,8 +699,8 @@ export function SectorEffectPage() {
             </div>
 
             <div className="matrix-fab">
-              <Button size="small" shape="circle" icon={<ArrowUp size={16} />} onClick={scrollToTop} title="回到顶部" />
-              <Button size="small" shape="circle" icon={<ArrowDown size={16} />} onClick={scrollToToday} title="跳到今天" />
+              <Button size="large" shape="circle" theme="primary" icon={<ArrowUp size={20} />} onClick={scrollToTop} title="回到顶部" aria-label="回到顶部" />
+              <Button size="large" shape="circle" theme="primary" icon={<ArrowDown size={20} />} onClick={scrollToToday} title="跳到今天" aria-label="跳到今天" />
             </div>
 
             {data.note && (
@@ -772,7 +777,9 @@ export function SectorEffectPage() {
           .matrix-toolbar .hidden-hint { display: inline-flex; align-items: center; gap: 6px; font-size: calc(12px * var(--font-scale, 1)); color: var(--td-text-color-secondary); margin-left: 4px; }
           .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: calc(12px * var(--font-scale, 1)); color: var(--td-text-color-placeholder); }
           .toolbar-label { color: var(--td-text-color-secondary); }
-          .matrix-fab { position: absolute; right: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 20; }
+          .matrix-fab { position: fixed; right: 26px; bottom: 26px; display: flex; flex-direction: column; gap: 12px; z-index: 9999; }
+          .matrix-fab .t-button { width: 48px; height: 48px; box-shadow: 0 6px 18px rgba(0,0,0,0.28); }
+          html.dark .matrix-fab .t-button { box-shadow: 0 6px 18px rgba(0,0,0,0.55); }
           .matrix-table td.cell-date { background: var(--td-brand-color-light, #e6f7ff); font-weight: 500; position: sticky; left: 0; z-index: 5; min-width: 90px; width: 90px; }
           .matrix-table .date-text { font-size: calc(12px * var(--font-scale, 1)); color: var(--td-text-color-primary, #333); font-variant-numeric: tabular-nums; }
           .matrix-table .date-week { font-size: calc(10px * var(--font-scale, 1)); margin-left: 4px; opacity: 0.7; }
@@ -784,8 +791,7 @@ export function SectorEffectPage() {
           .matrix-table tbody tr.row-editable:hover { outline: 2px solid var(--td-brand-color, #0052d9); outline-offset: -2px; }
           .matrix-table .cell-text { font-size: calc(12.5px * var(--font-scale, 1)); font-weight: 500; cursor: default; display: inline-block; padding: 2px 8px; border-radius: 3px; line-height: 1.6; transition: transform 0.15s ease; }
           .matrix-table .cell-text:hover { transform: scale(1.06); }
-          .merge-badge { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; border-radius: 50%; background: #b06b00; color: #fff; font-weight: 700; font-size: 11px; line-height: 1; margin-left: 3px; vertical-align: super; cursor: help; }
-          .merge-badge::after { content: '+'; }
+          .merge-badge { color: #b06b00; font-weight: 700; font-size: calc(14px * var(--font-scale, 1)); line-height: 1; margin-left: 3px; vertical-align: super; cursor: help; }
           .matrix-table .month-header-row td { background: linear-gradient(90deg, #fafafa 0%, #f0f0f0 100%); border: none; border-bottom: 2px solid var(--td-component-stroke, #e7e7e7); padding: 6px 12px; text-align: left; font-size: calc(13px * var(--font-scale, 1)); height: auto; color: var(--td-text-color-primary, #333); }
           .matrix-table .month-note { font-weight: 400; color: var(--td-text-color-secondary, #666); font-size: calc(12px * var(--font-scale, 1)); }
           .matrix-table .collapse-row td { text-align: center; font-size: calc(12px * var(--font-scale, 1)); letter-spacing: 0.3px; height: 28px; cursor: pointer; }
@@ -809,6 +815,7 @@ export function SectorEffectPage() {
           html.dark .matrix-table .cell-text.sentiment-L5 { background: rgba(207,34,34,0.92); color: #ffffff; }
           html.dark .matrix-table .month-header-row td { background: linear-gradient(90deg,#222,#1a1a1a); border-bottom-color: #333; color: #e0e0e0; }
           html.dark .matrix-table td.rest-cell, html.dark .matrix-table .collapse-cell { background: #161616 !important; color: #9a9a9a !important; }
+          html.dark .matrix-table td.holiday-rest { background: #2a2113 !important; color: #e8a04b !important; }
           html.dark .matrix-table .collapse-row td { color: #9a9a9a; }
           html.dark .matrix-fab .t-button { background: #2a2a2a; border-color: #3a3a3a; color: #e0e0e0; }
           html.dark .col-menu { background: #1f1f1f; border-color: #333; }
