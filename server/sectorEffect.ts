@@ -21,8 +21,23 @@ import { SECTOR_EFFECT_HISTORY, type SectorDayType } from "./sectorEffectHistory
 const EM_UT = "7eea3edcaed734bea9cbfc24409ed989";
 const SOURCE = "东方财富涨停板行情（涨停池）";
 
+/** 手动录入数据的来源标记。含此标记的日期属于用户资产，不会被自动抓取或模板导入覆盖。 */
+const MANUAL_SOURCE = "手动录入";
+
 /** 矩阵每行展示的板块列数上限，与用户腾讯文档模板「板块1~板块17」的列数对齐 */
 const MAX_SECTOR_COLS = 17;
+
+/**
+ * 判断某行是否属于「用户资产」——手动录入 或 腾讯文档模板。
+ *
+ * 这两类数据都不可被自动抓取的东财数据覆盖：
+ *   - 手动录入：数据源出问题时用户手工修正的结果，优先级最高；
+ *   - 腾讯文档模板：用户手工整理的历史基线（概念口径），与东财行业口径不同，覆盖会丢信息。
+ */
+function isProtectedSource(source: unknown): boolean {
+  const s = String(source || "");
+  return s.includes(MANUAL_SOURCE) || s.includes("腾讯文档");
+}
 
 interface LimitUpStock {
   code: string;
@@ -329,9 +344,10 @@ async function fetchAndStore(dateToken: string, opts?: { force?: boolean }): Pro
    */
   if (!opts?.force) {
     const existing = db.getSectorEffectByDate(result.date);
-    if (existing && String(existing.source || "").includes("腾讯文档")) {
+    // 手动录入的数据同样受保护——用户手工修正的结果不应被自动抓取顶掉。
+    if (existing && isProtectedSource(existing.source)) {
       console.log(
-        `[SectorEffect] ${result.date} 已有模板历史数据，保护跳过写入（需替换请显式传 force）`,
+        `[SectorEffect] ${result.date} 已有模板/手动录入数据，保护跳过写入（需替换请显式传 force）`,
       );
       return {
         date: result.date,
@@ -405,7 +421,12 @@ function importBuiltinHistory(force = false): { added: number; updated: number; 
     // day_type 并清空板块数据。防止旧版误把周末标为 trading 并写入脏数据
     // （如照搬腾讯文档列号 "1/2/3"、备注"低吸"等），也避免已入库旧脏数据残留。
     // 依据 sector-limitup-daily skill：周末/节假日不写入当日虚构数据。
+    //
+    // 例外：用户手动录入过该日数据（哪怕是休市日）时跳过，尊重用户修正。
     if (dayType !== "trading") {
+      if (existing && isProtectedSource(existing.source) && !force) {
+        continue;
+      }
       db.upsertSectorEffect({
         date: dateToken,
         day_type: dayType,
@@ -420,7 +441,7 @@ function importBuiltinHistory(force = false): { added: number; updated: number; 
       continue;
     }
 
-    // 非强制模式下，已存在的交易日保留现有数据（可能是实时抓取更新的）
+    // 非强制模式下，已存在的交易日保留现有数据（可能是实时抓取更新的，也可能是用户手动录入的）
     if (existing && !force) continue;
 
     db.upsertSectorEffect({
@@ -463,6 +484,8 @@ function cleanupGarbageSectors(): number {
   };
   const rows = db.getSectorEffectAll(100000);
   for (const r of rows) {
+    // 手动录入的数据由用户自己负责，不做垃圾清理（可能有意保留特定板块名）
+    if (isProtectedSource(r.source)) continue;
     let secs: Array<{ name: string; count: number }> = [];
     try { secs = JSON.parse(r.sectors_json); } catch { continue; }
     if (!Array.isArray(secs) || secs.length === 0) continue;
@@ -523,6 +546,8 @@ function repairKnownLegacyDateShift(): boolean {
   const target = db.getSectorEffectByDate('20260901');
   let targetSectors: Array<{ name: string; count: number }> = [];
   if (target) {
+    // 9/1 若是用户手动录入的 → 不迁移，尊重用户修正
+    if (isProtectedSource(target.source)) return false;
     try { targetSectors = JSON.parse(target.sectors_json); } catch { /* 解析失败按空处理 */ }
     // 9/1 已被「东方财富」抓取的真实数据覆盖过 → 不重复迁移，避免数据回滚
     if (String(target.source || '').includes('东方财富')) return false;
@@ -794,7 +819,7 @@ export function registerSectorEffectRoutes(app: express.Express): void {
         source: SOURCE,
         generatedAt: new Date().toISOString(),
         message: result.skipped
-          ? `${result.date} 已存在模板历史数据（概念口径），已保留未覆盖；实时抓取仅对新日期生效`
+          ? `${result.date} 已存在模板或手动录入数据，已保留未覆盖；实时抓取仅对新日期生效（如需替换请勾选强制覆盖）`
           : undefined,
       });
     } catch (error: any) {
@@ -804,6 +829,153 @@ export function registerSectorEffectRoutes(app: express.Express): void {
         source: SOURCE,
       });
     }
+  });
+
+  /**
+   * GET /api/sector-effect/day/:date
+   * 获取单日原始数据（编辑用）。与矩阵模式不同，这里不做列截断，
+   * 返回该日完整板块列表，保证编辑后不会意外丢掉超出展示列数的数据。
+   */
+  app.get("/api/sector-effect/day/:date", (req, res) => {
+    const dateToken = String(req.params.date || "").replace(/-/g, "").trim();
+    if (!/^\d{8}$/.test(dateToken)) {
+      return res.status(400).json({ success: false, error: "日期格式应为 YYYYMMDD" });
+    }
+    const row = db.getSectorEffectByDate(dateToken);
+    if (!row) {
+      return res.json({
+        success: true,
+        exists: false,
+        date: dateToken,
+        dayType: "trading" as SectorDayType,
+        sectors: [] as Array<{ name: string; count: number }>,
+        totalLimitUp: 0,
+        source: null,
+      });
+    }
+    let sectors: Array<{ name: string; count: number }> = [];
+    try { sectors = JSON.parse(row.sectors_json); } catch { sectors = []; }
+    return res.json({
+      success: true,
+      exists: true,
+      date: row.date,
+      dayType: row.day_type,
+      sectors,
+      totalLimitUp: row.total_limit_up,
+      source: row.source,
+      updatedAt: row.updated_at,
+      isManual: isProtectedSource(row.source),
+    });
+  });
+
+  /**
+   * PUT /api/sector-effect/day/:date
+   * 手动保存某日板块数据（数据源异常时的兜底录入）。
+   *
+   * body:
+   *   - sectors: [{ name: string, count: number }]  必填，板块与涨停数
+   *   - dayType: 'trading' | 'weekend' | 'holiday'  可选，默认 trading
+   *
+   * 写入后 source 标记为「手动录入」，此后自动抓取与模板导入都不会覆盖该日；
+   * 需要恢复自动更新时，用 DELETE 清空该日即可（清空后重新变回自动数据）。
+   */
+  app.put("/api/sector-effect/day/:date", (req, res) => {
+    const dateToken = String(req.params.date || "").replace(/-/g, "").trim();
+    if (!/^\d{8}$/.test(dateToken)) {
+      return res.status(400).json({ success: false, error: "日期格式应为 YYYYMMDD" });
+    }
+
+    const rawSectors = Array.isArray(req.body?.sectors) ? req.body.sectors : null;
+    if (!rawSectors) {
+      return res.status(400).json({ success: false, error: "缺少 sectors 字段" });
+    }
+
+    // 校验并规范化：板块名去空白、数量取非负整数；名称为空的行直接丢弃
+    const sectors: Array<{ name: string; count: number }> = [];
+    const warnings: string[] = [];
+    for (const item of rawSectors) {
+      const name = String(item?.name ?? "").trim();
+      if (!name) continue;
+      const count = Number(item?.count);
+      if (!Number.isFinite(count) || count < 0) {
+        warnings.push(`「${name}」的涨停数不是有效数字，已按 0 处理`);
+        sectors.push({ name, count: 0 });
+        continue;
+      }
+      sectors.push({ name, count: Math.round(count) });
+    }
+    if (sectors.length > MAX_SECTOR_COLS) {
+      return res.status(400).json({
+        success: false,
+        error: `板块数量最多 ${MAX_SECTOR_COLS} 个（当前 ${sectors.length} 个）`,
+      });
+    }
+
+    const rawDayType = String(req.body?.dayType || "trading");
+    const dayType: SectorDayType =
+      rawDayType === "weekend" || rawDayType === "holiday" ? rawDayType : "trading";
+
+    // 休市日不应带板块数据——若用户在休市日填了板块，保留但给出提示
+    if (dayType !== "trading" && sectors.length > 0) {
+      warnings.push("该日已标记为休市，但仍写入了板块数据，展示时会被休市样式覆盖");
+    }
+
+    const existing = db.getSectorEffectByDate(dateToken);
+    const nowIso = new Date().toISOString();
+    db.upsertSectorEffect({
+      date: dateToken,
+      day_type: dayType,
+      sectors_json: JSON.stringify(sectors),
+      total_limit_up: sectors.reduce((s, x) => s + x.count, 0),
+      source: MANUAL_SOURCE,
+      substituted_date: null,
+      created_at: existing?.created_at || nowIso,
+      updated_at: nowIso,
+    });
+
+    console.log(
+      `[SectorEffect] 手动保存 ${dateToken}：${sectors.length} 个板块，`
+      + `涨停合计 ${sectors.reduce((s, x) => s + x.count, 0)} 只（${dayType}）`,
+    );
+
+    return res.json({
+      success: true,
+      date: dateToken,
+      dayType,
+      sectorCount: sectors.length,
+      totalLimitUp: sectors.reduce((s, x) => s + x.count, 0),
+      source: MANUAL_SOURCE,
+      warnings: warnings.length > 0 ? warnings : undefined,
+      updatedAt: nowIso,
+    });
+  });
+
+  /**
+   * DELETE /api/sector-effect/day/:date
+   * 清空某日数据（板块置空、涨停数归零），并把来源改回自动数据源，
+   * 这样该日重新回到「可被自动抓取更新」的状态。日期行本身保留，不破坏日期轴。
+   */
+  app.delete("/api/sector-effect/day/:date", (req, res) => {
+    const dateToken = String(req.params.date || "").replace(/-/g, "").trim();
+    if (!/^\d{8}$/.test(dateToken)) {
+      return res.status(400).json({ success: false, error: "日期格式应为 YYYYMMDD" });
+    }
+    const existing = db.getSectorEffectByDate(dateToken);
+    if (!existing) {
+      return res.status(404).json({ success: false, error: "该日期不存在" });
+    }
+    db.upsertSectorEffect({
+      date: dateToken,
+      day_type: existing.day_type,
+      sectors_json: "[]",
+      total_limit_up: 0,
+      source: SOURCE,           // 改回自动源，允许后续自动抓取重新填充
+      substituted_date: null,
+      created_at: existing.created_at,
+      updated_at: new Date().toISOString(),
+    });
+    console.log(`[SectorEffect] 已清空 ${dateToken} 的板块数据，恢复为自动更新状态`);
+    return res.json({ success: true, date: dateToken, cleared: true });
   });
 
   /**

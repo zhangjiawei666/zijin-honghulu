@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Card, Input, MessagePlugin, Tooltip } from 'tdesign-react';
-import { Flame, Loader, RefreshCw, Search, Clock, Database, History } from 'lucide-react';
+import {
+  Alert, Button, Card, Dialog, Input, InputNumber, MessagePlugin, Radio, Select, Tooltip,
+} from 'tdesign-react';
+import {
+  Flame, Loader, RefreshCw, Search, Clock, Database, History, Pencil, Plus, Trash2, X,
+} from 'lucide-react';
 
 interface SectorCell {
   name: string;
@@ -88,6 +92,221 @@ const MONTH_NOTES: Record<number, string> = {
 /** 连续休市日超过此数量时折叠显示为省略行 */
 const COLLAPSE_THRESHOLD = 3;
 
+// ============= 单日编辑对话框 =============
+
+interface EditDraft {
+  name: string;
+  count: number;
+}
+
+const DAY_TYPE_OPTIONS = [
+  { value: 'trading', label: '交易日' },
+  { value: 'weekend', label: '周末休市' },
+  { value: 'holiday', label: '节假日休市' },
+];
+
+/**
+ * 手动编辑某一天的板块数据。
+ *
+ * 用于数据源抓取异常时的人工兜底：保存后该日被标记为「手动录入」，
+ * 自动抓取和模板导入都不会再覆盖它；点「清空该日」可恢复自动更新。
+ */
+function DayEditDialog({ open, dateToken, onClose, onSaved }: {
+  open: boolean;
+  dateToken: string | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [drafts, setDrafts] = useState<EditDraft[]>([]);
+  const [dayType, setDayType] = useState<string>('trading');
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [isManual, setIsManual] = useState(false);
+
+  // 打开时拉取该日原始数据（不做列截断，保证编辑不丢数据）
+  useEffect(() => {
+    if (!open || !dateToken) return;
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      try {
+        const resp = await fetch(`/api/sector-effect/day/${dateToken}`);
+        const json = await resp.json();
+        if (cancelled) return;
+        if (!resp.ok) throw new Error(json?.error || '读取失败');
+        const list: EditDraft[] = Array.isArray(json.sectors)
+          ? json.sectors.map((s: any) => ({ name: String(s?.name ?? ''), count: Number(s?.count ?? 0) }))
+          : [];
+        setDrafts(list.length > 0 ? list : [{ name: '', count: 0 }]);
+        setDayType(json.dayType || 'trading');
+        setIsManual(!!json.isManual);
+      } catch (err: any) {
+        if (!cancelled) {
+          MessagePlugin.error(err?.message || '读取该日数据失败');
+          onClose();
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [open, dateToken, onClose]);
+
+  const displayDate = useMemo(() => {
+    if (!dateToken || dateToken.length !== 8) return dateToken || '';
+    return `${dateToken.slice(0, 4)}/${Number(dateToken.slice(4, 6))}/${Number(dateToken.slice(6, 8))}`;
+  }, [dateToken]);
+
+  const handleSave = async () => {
+    if (!dateToken) return;
+    const valid = drafts.filter(d => d.name.trim());
+    // 校验数量
+    for (const d of valid) {
+      if (!Number.isFinite(d.count) || d.count < 0) {
+        MessagePlugin.warning(`「${d.name}」的涨停数无效，请填写 0 或正整数`);
+        return;
+      }
+    }
+    setSaving(true);
+    try {
+      const resp = await fetch(`/api/sector-effect/day/${dateToken}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sectors: valid.map(d => ({ name: d.name.trim(), count: Math.round(d.count) })),
+          dayType,
+        }),
+      });
+      const json = await resp.json();
+      if (!resp.ok || !json.success) throw new Error(json?.error || '保存失败');
+      MessagePlugin.success(`已保存 ${displayDate}：${json.sectorCount} 个板块，合计 ${json.totalLimitUp} 只涨停`);
+      onSaved();
+      onClose();
+    } catch (err: any) {
+      MessagePlugin.error(err?.message || '保存失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleClear = async () => {
+    if (!dateToken) return;
+    setClearing(true);
+    try {
+      const resp = await fetch(`/api/sector-effect/day/${dateToken}`, { method: 'DELETE' });
+      const json = await resp.json();
+      if (!resp.ok || !json.success) throw new Error(json?.error || '清空失败');
+      MessagePlugin.success(`已清空 ${displayDate}，该日恢复为自动更新`);
+      onSaved();
+      onClose();
+    } catch (err: any) {
+      MessagePlugin.error(err?.message || '清空失败');
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  const total = drafts.reduce((s, d) => s + (Number.isFinite(d.count) ? d.count : 0), 0);
+
+  return (
+    <Dialog
+      header={`手动编辑 · ${displayDate}`}
+      visible={open}
+      onClose={onClose}
+      width={620}
+      footer={(
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+          <Button variant="text" theme="danger" icon={<Trash2 size={15} />} loading={clearing} onClick={handleClear}>
+            清空该日
+          </Button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button variant="outline" onClick={onClose} disabled={saving || clearing}>取消</Button>
+            <Button theme="primary" icon={<Pencil size={15} />} loading={saving} disabled={loading} onClick={handleSave}>
+              保存
+            </Button>
+          </div>
+        </div>
+      )}
+    >
+      {loading ? (
+        <div style={{ padding: '32px 0', textAlign: 'center' }}>
+          <Loader size={22} className="animate-spin" style={{ margin: '0 auto 10px', color: 'var(--td-brand-color)' }} />
+          <p style={{ fontSize: 13, color: 'var(--td-text-color-secondary)' }}>正在读取该日数据……</p>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {isManual && (
+            <Alert theme="warning" message="该日当前为「手动录入」数据，自动更新与模板导入均不会覆盖它。" />
+          )}
+
+          {/* 日期类型 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 13, color: 'var(--td-text-color-secondary)', minWidth: 60 }}>日期类型</span>
+            <Radio.Group value={dayType} onChange={(v) => setDayType(String(v))} variant="default-filled">
+              {DAY_TYPE_OPTIONS.map(o => <Radio.Button key={o.value} value={o.value}>{o.label}</Radio.Button>)}
+            </Radio.Group>
+          </div>
+
+          {/* 板块列表 */}
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <span style={{ fontSize: 13, color: 'var(--td-text-color-secondary)' }}>
+                板块与涨停数（合计 <strong style={{ color: UP_COLOR }}>{total}</strong> 只）
+              </span>
+              <Button
+                size="small" variant="outline" icon={<Plus size={14} />}
+                onClick={() => setDrafts(prev => [...prev, { name: '', count: 0 }])}
+              >
+                添加板块
+              </Button>
+            </div>
+
+            <div style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {drafts.length === 0 && (
+                <p style={{ fontSize: 13, color: 'var(--td-text-color-placeholder)', textAlign: 'center', padding: '20px 0' }}>
+                  暂无板块，点「添加板块」开始录入
+                </p>
+              )}
+              {drafts.map((d, i) => (
+                <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, color: 'var(--td-text-color-placeholder)', width: 34, flexShrink: 0 }}>
+                    板块{i + 1}
+                  </span>
+                  <Input
+                    value={d.name}
+                    placeholder="板块名称"
+                    onChange={(v) => setDrafts(prev => prev.map((x, xi) => xi === i ? { ...x, name: String(v ?? '') } : x))}
+                    style={{ flex: 1 }}
+                  />
+                  <InputNumber
+                    value={d.count}
+                    min={0}
+                    step={1}
+                    theme="normal"
+                    style={{ width: 96 }}
+                    onChange={(v) => setDrafts(prev => prev.map((x, xi) => xi === i ? { ...x, count: Number(v ?? 0) } : x))}
+                  />
+                  <Button
+                    size="small" variant="text" shape="square"
+                    icon={<X size={14} />}
+                    onClick={() => setDrafts(prev => prev.filter((_, xi) => xi !== i))}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <p style={{ fontSize: 12, color: 'var(--td-text-color-placeholder)', lineHeight: 1.7, margin: 0 }}>
+            板块名称留空的行会被忽略。保存后该日标记为「手动录入」，自动更新不再覆盖；
+            需要恢复自动抓取时，点左下角「清空该日」即可。
+          </p>
+        </div>
+      )}
+    </Dialog>
+  );
+}
+
 export function SectorEffectPage() {
   const [date, setDate] = useState('');
   const [loading, setLoading] = useState(false);
@@ -98,6 +317,21 @@ export function SectorEffectPage() {
   const [renderError, setRenderError] = useState<string | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const todayRowRef = useRef<HTMLTableRowElement | null>(null);
+
+  // 手动编辑模式：开启后点击任意日期行可编辑该日板块数据
+  const [editMode, setEditMode] = useState(false);
+  const [editingDate, setEditingDate] = useState<string | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+
+  const openDayEditor = useCallback((dateToken: string) => {
+    setEditingDate(dateToken);
+    setEditOpen(true);
+  }, []);
+
+  const closeDayEditor = useCallback(() => {
+    setEditOpen(false);
+    setEditingDate(null);
+  }, []);
 
   // ============= 数据加载 =============
 
@@ -381,7 +615,8 @@ export function SectorEffectPage() {
         </h2>
         <p style={{ fontSize: 13, margin: 0, color: 'var(--td-text-color-secondary)', lineHeight: 1.6 }}>
           按交易日统计 A 股涨停股并归集到行业板块，以矩阵表格展示每日板块分布。
-          数据自动保留在本地，支持手动刷新更新。不把涨停家数直接等同于板块强度或买卖建议。
+          数据自动保留在本地，支持手动刷新更新；数据源异常时可开「手动编辑」逐日手工修正。
+          不把涨停家数直接等同于板块强度或买卖建议。
         </p>
       </div>
 
@@ -404,6 +639,18 @@ export function SectorEffectPage() {
           <Button size="large" variant="outline" icon={<Database size={16} />} disabled={loading} onClick={loadMatrix}>查看全部</Button>
           <Tooltip content="导入 2026 年腾讯文档模板历史数据（仅补齐缺失日期，不覆盖已有记录）">
             <Button size="large" variant="outline" icon={<History size={16} />} loading={importing} disabled={importing || loading} onClick={() => handleImportHistory(false)}>导入历史</Button>
+          </Tooltip>
+          <Tooltip content={editMode ? '退出编辑模式' : '开启后点击任意日期行，可手工修改该日的板块数据（数据源异常时的兜底录入）'}>
+            <Button
+              size="large"
+              variant="outline"
+              theme={editMode ? 'primary' : 'default'}
+              icon={<Pencil size={16} />}
+              disabled={loading}
+              onClick={() => setEditMode(v => !v)}
+            >
+              {editMode ? '退出编辑' : '手动编辑'}
+            </Button>
           </Tooltip>
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--td-text-color-placeholder)' }}>
             <Clock size={14} /><span>交易日当日 20:00 更新</span>
@@ -465,6 +712,14 @@ export function SectorEffectPage() {
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                 <span style={{ width: 12, height: 12, borderRadius: 2, backgroundColor: '#f9f0ff', border: '1px solid #d3adf7' }} /> 今日待更新
               </span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#722ed1' }} /> 手动录入 ✎
+              </span>
+              {editMode && (
+                <span style={{ color: 'var(--td-brand-color)', fontWeight: 600 }}>
+                  · 编辑模式已开启，点击任意日期行即可修改
+                </span>
+              )}
             </div>
           </div>
 
@@ -514,7 +769,12 @@ export function SectorEffectPage() {
                   // 休市日未折叠 → 正常显示
                   if (restStyle) {
                     return (
-                      <tr key={row.dateToken} ref={row.isToday ? todayRowRef : undefined}>
+                      <tr
+                        key={row.dateToken}
+                        ref={row.isToday ? todayRowRef : undefined}
+                        className={editMode ? 'row-editable' : undefined}
+                        onClick={editMode ? () => openDayEditor(row.dateToken) : undefined}
+                      >
                         <td className="cell-date" style={{ backgroundColor: restStyle.bg }}>
                           <span className="date-text" style={{ color: restStyle.fg }}>{row.date}</span>
                           <span className="date-week" style={{ color: restStyle.fg }}>{weekdayOf(row.date)}</span>
@@ -523,20 +783,32 @@ export function SectorEffectPage() {
                           style={{ backgroundColor: restStyle.bg, color: restStyle.fg }}>
                           {restStyle.label}
                           {row.dayType === 'today' && ' · 今日待更新，今晚 20:00 更新'}
+                          {editMode && <span style={{ marginLeft: 8, opacity: 0.75 }}>· 点击编辑</span>}
                         </td>
                       </tr>
                     );
                   }
 
                   // 交易日
+                  const isManual = !!row.source?.includes('手动录入');
                   return (
-                    <tr key={row.dateToken} ref={row.isToday ? todayRowRef : undefined}>
+                    <tr
+                      key={row.dateToken}
+                      ref={row.isToday ? todayRowRef : undefined}
+                      className={editMode ? 'row-editable' : undefined}
+                      onClick={editMode ? () => openDayEditor(row.dateToken) : undefined}
+                    >
                       <td className="cell-date">
                         <Tooltip content={`来源：${row.source || '未知'}`}>
-                          <span className="src-dot" style={{ backgroundColor: row.source?.includes('腾讯文档') ? '#bfbfbf' : UP_COLOR }} />
+                          <span className="src-dot" style={{ backgroundColor: row.source?.includes('腾讯文档') ? '#bfbfbf' : isManual ? '#722ed1' : UP_COLOR }} />
                         </Tooltip>
                         <span className="date-text">{row.date}</span>
                         <span className="date-week">{weekdayOf(row.date)}</span>
+                        {isManual && (
+                          <Tooltip content="该日为手动录入数据，自动更新不会覆盖">
+                            <span className="date-manual">✎</span>
+                          </Tooltip>
+                        )}
                         {row.substitutedDate && (
                           <Tooltip content={`实际数据日期: ${row.substitutedDate}`}>
                             <span className="date-subst">※</span>
@@ -560,6 +832,14 @@ export function SectorEffectPage() {
           )}
         </Card>
       )}
+
+      {/* 单日手动编辑对话框 */}
+      <DayEditDialog
+        open={editOpen}
+        dateToken={editingDate}
+        onClose={closeDayEditor}
+        onSaved={loadMatrix}
+      />
 
       {/* 无数据空状态 */}
       {data && data.mode === 'matrix' && data.rows.length === 0 && (
@@ -666,6 +946,11 @@ export function SectorEffectPage() {
         .matrix-table td.rest-cell { text-align: center; font-size: 12px; letter-spacing: 0.5px; height: 30px; }
         .matrix-table .src-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; margin-right: 4px; vertical-align: middle; flex-shrink: 0; }
         .matrix-table .date-subst { font-size: 10px; color: var(--td-warning-color, #e37318); cursor: help; margin-left: 2px; }
+        .matrix-table .date-manual { font-size: 10px; color: #722ed1; cursor: help; margin-left: 2px; }
+
+        /* 编辑模式：整行可点击并高亮 */
+        .matrix-table tbody tr.row-editable { cursor: pointer; }
+        .matrix-table tbody tr.row-editable:hover { outline: 2px solid var(--td-brand-color, #0052d9); outline-offset: -2px; }
         .matrix-table .cell-text { font-size: 12.5px; font-weight: 500; cursor: default; display: inline-block; padding: 2px 8px; border-radius: 3px; line-height: 1.6; transition: transform 0.15s ease; }
         .matrix-table .cell-text:hover { transform: scale(1.06); }
 
