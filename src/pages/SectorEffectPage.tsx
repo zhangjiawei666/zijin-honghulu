@@ -3,7 +3,7 @@ import {
   Alert, Button, Card, Dialog, Input, InputNumber, MessagePlugin, Radio, Select, Tooltip,
 } from 'tdesign-react';
 import {
-  Flame, Loader, RefreshCw, Search, Clock, Database, History, Pencil, Plus, Trash2, X,
+  Flame, Loader, RefreshCw, Clock, Database, Pencil, Plus, Trash2, X,
   Settings2, EyeOff,
 } from 'lucide-react';
 
@@ -86,6 +86,22 @@ const WINDOW_OPTIONS = [
   { value: 15, label: '近15日' },
   { value: 20, label: '近20日' },
 ];
+
+// ============= 配色即情绪：红深=涨停多=高潮防风险；红浅=涨停少=低迷找机会 =============
+function sentimentIntensity(count: number, max: number): number {
+  if (!count || !max) return 0;
+  return Math.min(1, count / max);
+}
+function sentimentBg(count: number, max: number): string {
+  if (!count) return 'transparent';
+  const k = Math.sqrt(sentimentIntensity(count, max)); // 强化中高区间对比
+  const s = [255, 241, 240]; // 浅红 #fff1f0
+  const e = [201, 30, 38]; // 深红
+  const r = Math.round(s[0] + (e[0] - s[0]) * k);
+  const g = Math.round(s[1] + (e[1] - s[1]) * k);
+  const b = Math.round(s[2] + (e[2] - s[2]) * k);
+  return `rgb(${r},${g},${b})`;
+}
 
 // ============= 单日编辑对话框（保持不变） =============
 
@@ -447,55 +463,23 @@ export function SectorEffectPage() {
     } finally { setRefreshing(false); }
   };
 
-  const handleImportHistory = async (force: boolean = false) => {
-    setImporting(true); setError(null);
-    try {
-      const resp = await fetch('/api/sector-effect/import-history', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force }) });
-      const json = await resp.json();
-      if (!resp.ok || !json.success) throw new Error(json?.error || '导入失败');
-      MessagePlugin.success(json.message || `已导入 ${json.added} 个交易日`);
-      await loadMatrix();
-    } catch (err: any) {
-      setError(err?.message || '导入历史数据失败');
-      MessagePlugin.error(err?.message || '导入历史数据失败');
-    } finally { setImporting(false); }
-  };
-
-  const handleQuery = async () => {
-    const raw = date.trim().replace(/-/g, '');
-    if (raw && !/^\d{8}$/.test(raw)) { MessagePlugin.warning('日期格式应为 YYYY-MM-DD 或 YYYYMMDD'); return; }
-    setLoading(true); setError(null);
-    try {
-      const query = raw ? `?date=${encodeURIComponent(raw)}` : `?window=${windowN}`;
-      const resp = await fetch(`/api/sector-effect${query}`);
-      const json = await resp.json();
-      if (!resp.ok) throw new Error(json?.error || `请求失败（${resp.status}）`);
-      setData(json as MatrixData);
-    } catch (err: any) {
-      setError(err?.message || '获取数据失败');
-      MessagePlugin.error(err?.message || '获取数据失败');
-    } finally { setLoading(false); }
-  };
 
   useEffect(() => { loadMatrix(); }, [loadMatrix]);
 
   const scrollToToday = useCallback(() => {
-    const row = todayRowRef.current; const wrapper = wrapperRef.current;
-    if (!row || !wrapper) return;
-    const rowRect = row.getBoundingClientRect();
-    const wrapRect = wrapper.getBoundingClientRect();
-    const rowTopInContent = (rowRect.top - wrapRect.top) + wrapper.scrollTop;
-    const target = rowTopInContent - wrapper.clientHeight / 2 + row.offsetHeight / 2;
-    const maxScroll = Math.max(0, wrapper.scrollHeight - wrapper.clientHeight);
-    wrapper.scrollTo({ top: Math.max(0, Math.min(target, maxScroll)), behavior: 'smooth' });
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    const todayEl = wrapper.querySelector<HTMLElement>('tr[data-today="1"]');
+    if (todayEl) {
+      const top = todayEl.getBoundingClientRect().top - wrapper.getBoundingClientRect().top + wrapper.scrollTop - wrapper.clientHeight / 2 + todayEl.offsetHeight / 2;
+      const maxScroll = Math.max(0, wrapper.scrollHeight - wrapper.clientHeight);
+      wrapper.scrollTo({ top: Math.max(0, Math.min(top, maxScroll)), behavior: 'smooth' });
+    } else {
+      // 无「今日待更新」行时，滚动到最新一日（表格最底部）
+      wrapper.scrollTo({ top: wrapper.scrollHeight, behavior: 'smooth' });
+    }
   }, []);
   const scrollToTop = useCallback(() => { wrapperRef.current?.scrollTo({ top: 0, behavior: 'smooth' }); }, []);
-
-  useEffect(() => {
-    if (data?.mode !== 'matrix' || !data.rows?.length) return;
-    const t = setTimeout(() => scrollToToday(), 200);
-    return () => clearTimeout(t);
-  }, [data, scrollToToday]);
 
   // 可见列（排除视图级隐藏）
   const visibleColumns = useMemo(
@@ -506,18 +490,36 @@ export function SectorEffectPage() {
 
   // ============= 渲染辅助 =============
 
+  // 全表最大涨停数（用于配色即情绪的色阶）
+  const maxCount = useMemo(() => {
+    let m = 0;
+    for (const row of data?.rows || []) {
+      const cells = row.cells || {};
+      for (const col of visibleColumns) {
+        const c = cells[col.key];
+        if (c && c.count > m) m = c.count;
+      }
+    }
+    return m;
+  }, [data?.rows, visibleColumns]);
+
   const renderCell = (cell: PivotCell | undefined, column: PivotColumn) => {
-    if (!cell) return <td key={column.key} className="sector-cell empty" />;
-    const merged = cell.parts.length > 1;
-    const tip = merged
-      ? `${column.label} ${cell.count}只涨停\n归并自：\n${cell.parts.map(p => `· ${p.name}: ${p.count}`).join('\n')}`
-      : `${column.label}: ${cell.count}只涨停`;
+    if (!cell || cell.count === 0) return <td key={column.key} className="sector-cell empty" />;
+    const count = cell.count;
+    const bg = sentimentBg(count, maxCount);
+    const intensity = sentimentIntensity(count, maxCount);
+    const textColor = intensity > 0.55 ? '#ffffff' : 'var(--td-text-color-primary, #333)';
+    const isMergedCol = column.merged;
+    const mergedParts = cell.parts && cell.parts.length > 1 ? cell.parts : null;
+    const tip = mergedParts
+      ? `${column.label} ${count} 只涨停\n归并自：\n${mergedParts.map(p => `· ${p.name}: ${p.count}`).join('\n')}`
+      : (isMergedCol ? `${column.label}（归并板块）：${count} 只涨停` : `${column.label}：${count} 只涨停`);
     return (
-      <td key={column.key} className="sector-cell" style={{ backgroundColor: CELL_BG_NORMAL }}>
+      <td key={column.key} className="sector-cell" style={{ backgroundColor: bg }}>
         <Tooltip content={tip} showArrow>
-          <span className="cell-text">
-            {column.label}{cell.count}
-            {merged && <sup className="merge-badge">!</sup>}
+          <span className="cell-text" style={{ color: textColor }}>
+            {column.label}{count}
+            {isMergedCol && <sup className="merge-badge" title="归并板块：悬停查看子板块明细">!</sup>}
           </span>
         </Tooltip>
       </td>
@@ -598,22 +600,10 @@ export function SectorEffectPage() {
 
         <Card bordered style={{ marginBottom: 16 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Input style={{ flex: 1, minWidth: 200 }} size="large" value={date} placeholder="指定日期（如 2026-08-31，留空则取最近交易日）" onChange={v => setDate(String(v || ''))} onEnter={handleQuery} clearable />
-            <Button size="large" theme="primary" icon={<Search size={16} />} loading={loading} disabled={loading} onClick={handleQuery}>查询</Button>
-            <Button size="large" icon={<RefreshCw size={16} />} loading={refreshing} disabled={refreshing || loading} onClick={handleRefresh}>{refreshing ? '更新中...' : '手动更新'}</Button>
-            <Button size="large" variant="outline" icon={<Database size={16} />} disabled={loading} onClick={loadMatrix}>查看全部</Button>
-            <Tooltip content="导入 2026 年腾讯文档模板历史数据（仅补齐缺失日期，不覆盖已有记录）">
-              <Button size="large" variant="outline" icon={<History size={16} />} loading={importing} disabled={importing || loading} onClick={() => handleImportHistory(false)}>导入历史</Button>
-            </Tooltip>
             <Tooltip content={editMode ? '退出编辑模式' : '开启后点击任意日期行，可手工修改该日的板块数据'}>
               <Button size="large" variant="outline" theme={editMode ? 'primary' : 'default'} icon={<Pencil size={16} />} disabled={loading} onClick={() => setEditMode(v => !v)}>{editMode ? '退出编辑' : '手动编辑'}</Button>
             </Tooltip>
             <Button size="large" variant="outline" icon={<Settings2 size={16} />} onClick={() => setManageOpen(true)}>板块管理</Button>
-            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, fontSize: 'calc(12px * var(--font-scale, 1))', color: 'var(--td-text-color-placeholder)' }}>
-              <span>只看近</span>
-              <Select value={windowN} onChange={v => setWindowN(Number(v))} style={{ width: 110 }} options={WINDOW_OPTIONS} />
-              <span>日主线</span>
-            </div>
           </div>
           {hiddenKeys.size > 0 && (
             <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, fontSize: 'calc(12px * var(--font-scale, 1))', color: 'var(--td-text-color-secondary)' }}>
@@ -637,30 +627,14 @@ export function SectorEffectPage() {
 
         {data && data.mode === 'matrix' && data.rows.length > 0 && (
           <Card bordered style={{ overflow: 'visible' }}>
-            <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 'calc(13px * var(--font-scale, 1))', color: 'var(--td-text-color-secondary)', display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', marginBottom: 6 }}>
-                <span style={{ fontWeight: 600, color: 'var(--td-text-color-primary)' }}>板块效应</span>
-                <span>共 <strong>{data.totalDates}</strong> 天</span>
-                <span>·</span>
-                <span>交易日 <strong>{data.stats?.trading ?? 0}</strong></span>
-                <span>·</span>
-                <span>周末休市 <strong>{data.stats?.weekend ?? 0}</strong></span>
-                <span>·</span>
-                <span>节假日 <strong>{data.stats?.holiday ?? 0}</strong></span>
-                <span>·</span>
-                <span>今日 <strong>{data.stats?.today ?? 0}</strong></span>
-                <span>·</span>
-                <span>显示 <strong>{visibleColumns.length}</strong> 个板块列</span>
-                <div style={{ display: 'flex', gap: 6, marginLeft: 8 }}>
-                  <Button size="small" variant="outline" onClick={scrollToTop}>回到顶部</Button>
-                  <Button size="small" variant="outline" onClick={scrollToToday}>跳到今天</Button>
-                </div>
-              </div>
-              <div style={{ fontSize: 'calc(12px * var(--font-scale, 1))', color: 'var(--td-text-color-placeholder)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 12, height: 12, borderRadius: 2, backgroundColor: '#fff1f0', border: '1px solid #ffccc7' }} /> 涨停多（情绪高）</span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 12, height: 12, borderRadius: 2, backgroundColor: '#f5f5f5', border: '1px solid #e7e7e7' }} /> 周末/节假日休市</span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#722ed1' }} /> 归并板块（悬停看子板块）</span>
-                {editMode && <span style={{ color: 'var(--td-brand-color)', fontWeight: 600 }}>· 编辑模式已开启，点击任意日期行即可修改</span>}
+            <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <Button size="small" variant="outline" onClick={scrollToTop}>回到顶部</Button>
+              <Button size="small" variant="outline" onClick={scrollToToday}>跳到今天</Button>
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, fontSize: 'calc(12px * var(--font-scale, 1))', color: 'var(--td-text-color-placeholder)' }}>
+                <span className="color-legend" title="颜色越深 = 当日该板块涨停越多 = 情绪越高潮（防风险）；越浅 = 涨停越少 = 低迷（找机会）" />
+                <span>只看近</span>
+                <Select value={windowN} onChange={v => setWindowN(Number(v))} style={{ width: 110 }} options={WINDOW_OPTIONS} />
+                <span>日主线</span>
               </div>
             </div>
 
@@ -703,7 +677,7 @@ export function SectorEffectPage() {
                     const restStyle = DAY_TYPE_STYLE[row.dayType];
                     if (restStyle) {
                       return (
-                        <tr key={row.dateToken} ref={row.isToday ? todayRowRef : undefined} className={editMode ? 'row-editable' : undefined} onClick={editMode ? () => openDayEditor(row.dateToken) : undefined}>
+                        <tr key={row.dateToken} ref={row.isToday ? todayRowRef : undefined} data-today={row.isToday ? '1' : undefined} className={editMode ? 'row-editable' : undefined} onClick={editMode ? () => openDayEditor(row.dateToken) : undefined}>
                           <td className="cell-date" style={{ backgroundColor: restStyle.bg }}>
                             <span className="date-text" style={{ color: restStyle.fg }}>{row.date}</span>
                             <span className="date-week" style={{ color: restStyle.fg }}>{weekdayOf(row.date)}</span>
@@ -718,7 +692,7 @@ export function SectorEffectPage() {
                     }
                     const isManual = !!row.source?.includes('手动录入');
                     return (
-                      <tr key={row.dateToken} ref={row.isToday ? todayRowRef : undefined} className={editMode ? 'row-editable' : undefined} onClick={editMode ? () => openDayEditor(row.dateToken) : undefined}>
+                      <tr key={row.dateToken} ref={row.isToday ? todayRowRef : undefined} data-today={row.isToday ? '1' : undefined} className={editMode ? 'row-editable' : undefined} onClick={editMode ? () => openDayEditor(row.dateToken) : undefined}>
                         <td className="cell-date">
                           <Tooltip content={`来源：${row.source || '未知'}`}>
                             <span className="src-dot" style={{ backgroundColor: row.source?.includes('腾讯文档') ? '#bfbfbf' : isManual ? '#722ed1' : UP_COLOR }} />
@@ -796,6 +770,7 @@ export function SectorEffectPage() {
           .matrix-table thead th { position: sticky; top: 0; z-index: 10; background: var(--td-bg-color-secondary, #f3f3f3); border: 1px solid var(--td-component-stroke, #e7e7e7); padding: 8px 6px; text-align: center; font-weight: 600; font-size: calc(12px * var(--font-scale, 1)); color: var(--td-text-color-primary, #333); white-space: nowrap; cursor: context-menu; }
           .matrix-table thead th.col-date { background: var(--td-brand-color-light, #e6f7ff); min-width: 90px; width: 90px; position: sticky; top: 0; left: 0; z-index: 15; }
           .col-merged-flag { margin-left: 3px; color: #b06b00; font-size: calc(11px * var(--font-scale, 1)); }
+          .color-legend { display: inline-block; width: 46px; height: 12px; border-radius: 3px; vertical-align: middle; background: linear-gradient(90deg, #fff1f0 0%, #ffa39e 45%, #cf1322 100%); border: 1px solid var(--td-component-stroke, #e7e7e7); cursor: help; }
           .matrix-table tbody tr:hover { background: var(--td-bg-color-container-hover, #fafafa); }
           .matrix-table td { border: 1px solid var(--td-component-stroke, #e7e7e7); padding: 4px 4px; text-align: center; vertical-align: middle; height: 34px; min-width: 100px; white-space: nowrap; }
           .matrix-table td.sector-cell.empty { background: #fafafa !important; }
