@@ -46,8 +46,11 @@ interface SectorFetchResult {
   source: string;                                // 实际生效的数据源名称
 }
 
-/** 矩阵每行展示的板块列数上限，与用户腾讯文档模板「板块1~板块18」（实际用到第 19 格）的列数对齐 */
-const MAX_SECTOR_COLS = 18;
+/**
+ * 单日板块数「软上限」——仅用于防止脏数据（如数据源一次性返回上百个无意义板块），
+ * 不参与列数计算。表格列数由「历史上出现过的板块名并集」动态决定，随数据增长，无硬上限。
+ */
+const SOFT_DAILY_SECTOR_CAP = 60;
 
 /**
  * 判断某行是否属于「用户资产」——手动录入 或 腾讯文档模板。
@@ -311,6 +314,243 @@ function normalizeThsSector(raw: string): string {
   const base = String(raw || "").trim();
   if (!base) return "未标注板块";
   return THS_SECTOR_ALIAS[base] || base;
+}
+
+// ============= 展示层归并表（板块名 → 标准名） =============
+//
+// 仅在渲染阶段生效；原始板块名仍原样存库（手动编辑 / 审计均可追溯）。
+// 只合并「同一子板块 / 同一炒作驱动」的同义板块，绝不臆造归类。
+// 该表与数据源无关：腾讯文档基线、同花顺实时抓取、东财回退走同一套透视逻辑。
+//
+// 用户可在界面（板块管理）通过 app_meta 热更新覆盖，无需重新打包。
+const SECTOR_CANON_GROUPS: Record<string, string[]> = {
+  农业: ["大农业", "农林牧渔", "养殖", "猪肉", "养猪"],
+  电力: ["智能电网", "算电协同", "AI电力", "AI配电", "AI能源", "电力+网络设备", "AI电力相关"],
+  半导体: ["国产芯片", "芯片", "存储", "光刻机", "光刻胶", "大硅片", "硅片", "磷化铟", "长鑫科技", "CPU", "闪存", "存储芯片", "国产芯片+半导体", "存储+芯片", "存储芯片5+国产芯片"],
+  液冷散热: ["液冷", "液冷服务器", "AI液冷", "服务器散热", "数据中心散热", "金刚石散热", "AI液冷散热", "AI散热"],
+  算力: ["数据中心", "云计算", "超节点", "算力相关", "算力+数据中心", "数据中心算力", "云计算数据中心", "算力/词元概念"],
+  AI应用: ["AI营销", "AI传媒", "AIPC", "AI手机", "AI硬件", "人工智能大模型", "AI大模型", "阿里AI", "AI编程", "AI基站"],
+  医药: ["医疗医药", "中药", "AI医疗"],
+  商业航天: ["军工", "航天", "航天+军工", "太空光伏"],
+  锂电池: ["电池", "固态电池", "钠离子电池", "锂电产业链", "电池产业链", "锂电池产业链", "锂矿", "锂矿+锂电池", "新能源产业链", "电池储能", "储能", "PET符合铜箔"],
+  石油石化: ["石油化工", "油气", "油服", "石油天然气", "石油", "石油石化"],
+  黄金: ["贵金属", "黄金贵金属"],
+  有色金属: ["有色金属", "有色稀土", "稀土", "矿产资源", "铝"],
+  房地产: ["地产", "地产基建", "房地产"],
+  基建: ["基建", "高铁轨交", "超级高铁"],
+  传媒: ["影视", "影视短剧", "影视视频相关", "短剧", "游戏"],
+  磷化工: ["磷化工/化工", "磷化工"],
+  氟化工: ["氟化工/PTEE"],
+  玻璃基板: ["玻璃基板", "玻璃基板封装", "苹果+玻璃基板", "玻璃纤维布", "电子布"],
+  重组: ["资产重组", "并购重组", "股权转让", "摘帽", "ST摘帽", "摘帽相关"],
+  培育钻石: ["培育钻石", "培育砖石"],
+  核聚变: ["可控核聚变", "核聚变"],
+  氢能: ["氢能源", "氢能", "氢气"],
+  天然气: ["天然气"],
+  大消费: ["消费"],
+  业绩增长: ["业绩"],
+};
+
+/** 扁平化：别名 → 标准名（标准名本身不入表） */
+const BASE_SECTOR_CANON: Record<string, string> = {};
+for (const [std, aliases] of Object.entries(SECTOR_CANON_GROUPS)) {
+  for (const a of aliases) if (a && a !== std) BASE_SECTOR_CANON[a] = std;
+}
+
+const META_CANON_OVERRIDES = "sector_canon_overrides"; // 手动合并覆盖：alias -> standard
+const META_DISPLAY_NAMES = "sector_display_names";      // 手动显示名：standard -> label
+
+/** 读取手动合并覆盖（app_meta，可热更新） */
+function loadCanonOverrides(): Record<string, string> {
+  try {
+    const v = db.getMeta(META_CANON_OVERRIDES);
+    return v ? JSON.parse(v) : {};
+  } catch {
+    return {};
+  }
+}
+/** 读取手动显示名（app_meta，可热更新） */
+function loadDisplayNames(): Record<string, string> {
+  try {
+    const v = db.getMeta(META_DISPLAY_NAMES);
+    return v ? JSON.parse(v) : {};
+  } catch {
+    return {};
+  }
+}
+/** 生效的归并映射：基础表 + 手动覆盖（覆盖优先） */
+function effectiveCanon(): Record<string, string> {
+  return { ...BASE_SECTOR_CANON, ...loadCanonOverrides() };
+}
+/** 板块名 → 标准名 */
+function canonOf(name: string, map: Record<string, string>): string {
+  const n = String(name || "").trim();
+  return (n && map[n]) || n || "未标注板块";
+}
+/** 标准名 → 显示标签（手动重命名优先） */
+function displayOf(std: string, map: Record<string, string>): string {
+  return (std && map[std]) || std;
+}
+
+// ============= 透视构建：板块名 pivot =============
+
+interface PivotColumn {
+  key: string;     // 标准名（透视键）
+  label: string;   // 显示标签（可手动重命名）
+  merged: boolean; // 是否由多个原名归并而来（用于角标）
+}
+interface PivotCell {
+  count: number;
+  parts: Array<{ name: string; count: number }>; // 当日构成（悬停明细）
+}
+interface PivotRow {
+  date: string;        // 显示日期 YYYY/M/D
+  dateToken: string;   // YYYYMMDD
+  dayType: DisplayDayType;
+  isToday: boolean;
+  source: string | null;
+  substitutedDate: string | null;
+  cells: Record<string, PivotCell>; // key -> cell
+}
+
+/**
+ * 把按日存储的板块数据透视成「板块名 × 日期」矩阵。
+ *
+ * - 列 = 历史上出现过的板块标准名并集（经归并），无硬上限，随数据增长；
+ * - 排序：近 windowDays 个交易日的活跃度降序（近期活跃靠前；windowDays=0 显示全部）；
+ * - 过滤：windowDays>0 时仅保留「近 windowDays 交易日有过涨停」的列；
+ * - 单元格：同日多个原名归并时涨停数相加，parts 记录各原名明细供悬停；
+ * - 周末/节假日作为空行保留在日期轴中。
+ */
+function buildSectorPivot(
+  allRows: Array<{
+    date: string;
+    day_type: string;
+    sectors_json: string;
+    source: string | null;
+    substituted_date: string | null;
+  }>,
+  windowDays: number,
+): { columns: PivotColumn[]; rows: PivotRow[] } {
+  const canonMap = effectiveCanon();
+  const dispMap = loadDisplayNames();
+
+  interface DayAgg {
+    date: string;
+    dateToken: string;
+    dayType: DisplayDayType;
+    isToday: boolean;
+    source: string | null;
+    substitutedDate: string | null;
+    trading: boolean;
+    map: Map<string, { count: number; parts: Map<string, number> }>;
+  }
+
+  const dayAgg = new Map<string, DayAgg>();
+  const stdAliases = new Map<string, Set<string>>(); // 每个标准名出现过哪些原名（判定 merged）
+  const todayToken = toDateToken(new Date());
+
+  for (const r of allRows) {
+    let sectors: Array<{ name: string; count: number }> = [];
+    try {
+      sectors = JSON.parse(r.sectors_json);
+    } catch {
+      sectors = [];
+    }
+    if (!Array.isArray(sectors)) sectors = [];
+
+    const storedType = (r.day_type as SectorDayType) || "trading";
+    const isToday = r.date === todayToken;
+    const dayType: DisplayDayType =
+      isToday && sectors.length === 0 && storedType === "trading" ? "today" : storedType;
+
+    const entry: DayAgg = {
+      date: fmtDateDisplay(r.date),
+      dateToken: r.date,
+      dayType,
+      isToday,
+      source: r.source ?? null,
+      substitutedDate: r.substituted_date,
+      trading: storedType === "trading",
+      map: new Map(),
+    };
+
+    for (const s of sectors) {
+      const raw = String(s?.name ?? "").trim();
+      const std = canonOf(raw, canonMap);
+      const cnt = Number(s?.count) || 0;
+      if (!std) continue;
+      let agg = entry.map.get(std);
+      if (!agg) {
+        agg = { count: 0, parts: new Map() };
+        entry.map.set(std, agg);
+      }
+      agg.count += cnt;
+      agg.parts.set(raw, (agg.parts.get(raw) || 0) + cnt);
+      if (!stdAliases.has(std)) stdAliases.set(std, new Set());
+      stdAliases.get(std)!.add(raw);
+    }
+    dayAgg.set(r.date, entry);
+  }
+
+  // 近 N 交易日（用于活跃度排序与主线过滤）
+  const tradingDates = [...dayAgg.values()]
+    .filter(d => d.trading)
+    .map(d => d.dateToken)
+    .sort();
+  const lastN = new Set(windowDays > 0 ? tradingDates.slice(-windowDays) : tradingDates);
+
+  const colScore = new Map<string, number>(); // 近窗口活跃度
+  const colTotal = new Map<string, number>(); // 全样本合计
+  for (const d of dayAgg.values()) {
+    for (const [std, agg] of d.map) {
+      colTotal.set(std, (colTotal.get(std) || 0) + agg.count);
+      if (windowDays === 0 || lastN.has(d.dateToken)) {
+        colScore.set(std, (colScore.get(std) || 0) + agg.count);
+      }
+    }
+  }
+
+  let colKeys = [...colTotal.keys()];
+  if (windowDays > 0) colKeys = colKeys.filter(k => (colScore.get(k) || 0) > 0);
+  colKeys.sort(
+    (a, b) =>
+      (colScore.get(b) || 0) - (colScore.get(a) || 0) ||
+      (colTotal.get(b) || 0) - (colTotal.get(a) || 0) ||
+      a.localeCompare(b, "zh-Hans-CN"),
+  );
+
+  const columns: PivotColumn[] = colKeys.map(k => ({
+    key: k,
+    label: displayOf(k, dispMap),
+    merged: (stdAliases.get(k)?.size || 0) > 1,
+  }));
+
+  const rows: PivotRow[] = [...dayAgg.values()]
+    .sort((a, b) => a.dateToken.localeCompare(b.dateToken))
+    .map(d => {
+      const cells: Record<string, PivotCell> = {};
+      for (const k of colKeys) {
+        const agg = d.map.get(k);
+        if (agg) {
+          cells[k] = {
+            count: agg.count,
+            parts: [...agg.parts.entries()].map(([name, count]) => ({ name, count })),
+          };
+        }
+      }
+      return {
+        date: d.date,
+        dateToken: d.dateToken,
+        dayType: d.dayType,
+        isToday: d.isToday,
+        source: d.source,
+        substitutedDate: d.substitutedDate,
+        cells,
+      };
+    });
+
+  return { columns, rows };
 }
 
 /**
@@ -896,86 +1136,50 @@ export function registerSectorEffectRoutes(app: express.Express): void {
         });
       }
 
-      // 矩阵模式：返回所有历史数据
-      const allRows = db.getSectorEffectAll(limit);
+      // 矩阵模式：按「板块名透视(pivot)」重排。
+      // 列 = 历史上出现过的板块名并集（经归并映射），无硬上限；
+      // 排序按近 windowDays 交易日活跃度（近期活跃靠前）；windowDays=0 显示全部列。
+      const windowDays = (() => {
+        const w = parseInt(String(req.query.window || "15"), 10);
+        return [0, 10, 15, 20].includes(w) ? w : 15;
+      })();
+      const allRowsAll = db.getSectorEffectAll(
+        Math.min(parseInt(String(req.query.limit || "100000"), 10) || 100000, 100000),
+      );
 
-      if (allRows.length === 0) {
+      if (allRowsAll.length === 0) {
         return res.json({
           mode: 'matrix',
+          window: windowDays,
           rows: [],
           columns: [],
-          maxCols: 0,
           totalDates: 0,
           source: SOURCE,
           note: '暂无数据，请点击"更新"按钮获取最新数据',
         });
       }
 
-      // 构建矩阵行。
-      // 每行只取涨停数最多的前 MAX_SECTOR_COLS 个板块：历史基线是概念口径（模板 18 列），
-      // 实时抓取是东财行业口径（单日可达 40+ 板块），若不截断会让表格列数被单日行业数据撑爆，
-      // 导致其余百余行几乎全空。截断后两种口径在同一张表里都能保持可读。
-      const todayToken = toDateToken(new Date());
-      const matrixRows: MatrixRow[] = allRows.map(r => {
-        const sectors = (JSON.parse(r.sectors_json) as Array<{ name: string; count: number }>)
-          .slice(0, MAX_SECTOR_COLS);
-        const storedType = (r.day_type as SectorDayType) || "trading";
-        const isToday = r.date === todayToken;
-        /**
-         * 「今日待更新」只在今天**是交易日但还没有数据**时成立：
-         * 今天若是周末/法定节假日，仍应显示对应的休市文案，不能被今天这个条件覆盖。
-         */
-        const dayType: DisplayDayType =
-          (isToday && sectors.length === 0 && storedType === "trading") ? "today" : storedType;
-        return {
-          date: fmtDateDisplay(r.date),
-          dateToken: r.date,
-          sectors,
-          totalLimitUp: r.total_limit_up,
-          substitutedDate: r.substituted_date,
-          source: r.source ?? null,
-          dayType,
-          isToday,
-        };
-      });
-
-      // 列对齐：按腾讯文档模板语义，每行板块数组即「板块1~板块N」的列顺序
-      // （用户在文档里每天按列位手填，并非固定板块名）。因此直接按位置映射，
-      // 保证用户填进去的每一个板块（含农业等低频板块）都能显示，
-      // 不再做"全局按名归并"——那种方式会把出现频率低的板块踢出列集合导致漏展示。
-      const maxSectorCount = Math.max(...matrixRows.map(r => r.sectors.length), 11);
-      const maxCols = Math.min(maxSectorCount, MAX_SECTOR_COLS);
-
-      // 对齐每行数据：cells[i] = 该行第 i 个板块（文档列位），不足补 null
-      const alignedRows = matrixRows.map(row => {
-        const cells = new Array<{ name: string; count: number } | null>(maxCols).fill(null);
-        for (let i = 0; i < Math.min(row.sectors.length, maxCols); i++) {
-          cells[i] = row.sectors[i];
-        }
-        return { ...row, cells };
-      });
-
-      // 生成列标题（板块1~板块N）
-      const columns = Array.from({ length: maxCols }, (_, i) => `板块${i + 1}`);
+      const pivot = buildSectorPivot(allRowsAll, windowDays);
+      const stats = {
+        trading: pivot.rows.filter(r => r.dayType === 'trading').length,
+        weekend: pivot.rows.filter(r => r.dayType === 'weekend').length,
+        holiday: pivot.rows.filter(r => r.dayType === 'holiday').length,
+        today: pivot.rows.filter(r => r.dayType === 'today').length,
+      };
 
       res.json({
         mode: 'matrix',
-        rows: alignedRows,
-        columns,
-        maxCols,
-        totalDates: alignedRows.length,
-        stats: {
-          trading: matrixRows.filter(r => r.dayType === 'trading').length,
-          weekend: matrixRows.filter(r => r.dayType === 'weekend').length,
-          holiday: matrixRows.filter(r => r.dayType === 'holiday').length,
-          today: matrixRows.filter(r => r.dayType === 'today').length,
-        },
+        window: windowDays,
+        columns: pivot.columns,
+        rows: pivot.rows,
+        totalDates: pivot.rows.length,
+        stats,
         source: SOURCE,
         generatedAt: new Date().toISOString(),
         note:
-          '日期轴完整保留，休市日（周末、法定节假日）逐行显示并标注，不省略；'
-          + '按行业板块纵向汇总；仅统计沪深主板、创业板、科创板 A 股普通股；'
-          + '涨停状态来自数据源涨停池；历史数据保留在本地；'
+          '列由历史上出现过的板块名并集动态生成（无硬上限，随数据增长）；'
+          + '同板块固定在同一列，便于纵向追踪持续性与情绪；涨停为 0 当天留空；'
+          + '归并仅发生在展示层，原始板块名仍保留在库中；'
           + '涨停家数不代表板块强度或买卖建议。',
       });
     } catch (error: any) {
@@ -1098,10 +1302,10 @@ export function registerSectorEffectRoutes(app: express.Express): void {
       }
       sectors.push({ name, count: Math.round(count) });
     }
-    if (sectors.length > MAX_SECTOR_COLS) {
+    if (sectors.length > SOFT_DAILY_SECTOR_CAP) {
       return res.status(400).json({
         success: false,
-        error: `板块数量最多 ${MAX_SECTOR_COLS} 个（当前 ${sectors.length} 个）`,
+        error: `单日板块数量最多 ${SOFT_DAILY_SECTOR_CAP} 个（当前 ${sectors.length} 个）`,
       });
     }
 
@@ -1194,6 +1398,87 @@ export function registerSectorEffectRoutes(app: express.Express): void {
       });
     } catch (error: any) {
       res.status(500).json({ success: false, error: error?.message || "导入历史数据失败" });
+    }
+  });
+
+  // ============= 板块归并配置（手动安全网） =============
+  // 这些覆盖存储在 app_meta，独立于板块数据，自动同步/抓取不会触碰；
+  // 用户可在此纠偏自动归并、合并新概念、重命名列、或一键重置回自动。
+
+  /**
+   * GET /api/sector-effect/canon
+   * 返回当前生效的归并配置：基础分组、手动覆盖、手动显示名。
+   */
+  app.get("/api/sector-effect/canon", (_req, res) => {
+    try {
+      res.json({
+        success: true,
+        groups: SECTOR_CANON_GROUPS,
+        overrides: loadCanonOverrides(),
+        displayNames: loadDisplayNames(),
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "读取归并配置失败" });
+    }
+  });
+
+  /**
+   * POST /api/sector-effect/canon
+   * 手动维护归并/重命名（安全网）。
+   * body.action:
+   *   - merge   : { alias, standard } 把某原名归并到标准列（standard 可为已有或新建）
+   *   - unmerge : { alias }          解除归并（该原名独立成列）
+   *   - rename  : { standard, label } 重命名某标准列的显示标签
+   *   - reset   : 清空全部手动覆盖与显示名，回到纯自动透视
+   */
+  app.post("/api/sector-effect/canon", (req, res) => {
+    try {
+      const action = String(req.body?.action || "");
+      const overrides = loadCanonOverrides();
+      const displayNames = loadDisplayNames();
+
+      if (action === "reset") {
+        db.setMeta(META_CANON_OVERRIDES, JSON.stringify({}));
+        db.setMeta(META_DISPLAY_NAMES, JSON.stringify({}));
+        return res.json({ success: true, action, overrides: {}, displayNames: {} });
+      }
+
+      if (action === "merge") {
+        const alias = String(req.body?.alias || "").trim();
+        const standard = String(req.body?.standard || "").trim();
+        if (!alias || !standard) {
+          return res.status(400).json({ success: false, error: "merge 需要 alias 与 standard" });
+        }
+        overrides[alias] = standard;
+        db.setMeta(META_CANON_OVERRIDES, JSON.stringify(overrides));
+        return res.json({ success: true, action, overrides, displayNames });
+      }
+
+      if (action === "unmerge") {
+        const alias = String(req.body?.alias || "").trim();
+        if (!alias) return res.status(400).json({ success: false, error: "unmerge 需要 alias" });
+        // 解除归并 = 该原名独立成列（映射到自身）
+        overrides[alias] = alias;
+        db.setMeta(META_CANON_OVERRIDES, JSON.stringify(overrides));
+        return res.json({ success: true, action, overrides, displayNames });
+      }
+
+      if (action === "rename") {
+        const standard = String(req.body?.standard || "").trim();
+        const label = String(req.body?.label || "").trim();
+        if (!standard) return res.status(400).json({ success: false, error: "rename 需要 standard" });
+        if (label) displayNames[standard] = label;
+        else delete displayNames[standard];
+        db.setMeta(META_DISPLAY_NAMES, JSON.stringify(displayNames));
+        return res.json({ success: true, action, overrides, displayNames });
+      }
+
+      return res.status(400).json({
+        success: false,
+        error: "未知 action，支持 merge / unmerge / rename / reset",
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "更新归并配置失败" });
     }
   });
 
