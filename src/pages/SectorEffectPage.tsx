@@ -195,16 +195,20 @@ export function SectorEffectPage() {
 
   // ============= 滚动控制 =============
 
-  /** 跳到今天所在行（手动 offset 计算，避免 sticky 表格中 scrollIntoView 失效） */
+  /** 跳到今天所在行（用 getBoundingClientRect 在内容空间中精确定位 + 滚动范围裁剪，
+   *  避免 sticky 表头/多层定位祖先导致 offsetTop 计算失败） */
   const scrollToToday = useCallback(() => {
     const row = todayRowRef.current;
     const wrapper = wrapperRef.current;
     if (!row || !wrapper) return;
-    const rowTop = row.offsetTop - (wrapper.offsetTop || 0);
-    wrapper.scrollTo({
-      top: rowTop - wrapper.clientHeight / 2 + row.offsetHeight / 2,
-      behavior: 'smooth',
-    });
+    const rowRect = row.getBoundingClientRect();
+    const wrapRect = wrapper.getBoundingClientRect();
+    // 行顶在 wrapper 内容空间中的位置 = (行视口顶 - wrapper 视口顶) + 当前已滚动距离
+    const rowTopInContent = (rowRect.top - wrapRect.top) + wrapper.scrollTop;
+    const target = rowTopInContent - wrapper.clientHeight / 2 + row.offsetHeight / 2;
+    const maxScroll = Math.max(0, wrapper.scrollHeight - wrapper.clientHeight);
+    const clamped = Math.max(0, Math.min(target, maxScroll));
+    wrapper.scrollTo({ top: clamped, behavior: 'smooth' });
   }, []);
 
   const scrollToTop = useCallback(() => {
@@ -402,7 +406,7 @@ export function SectorEffectPage() {
             <Button size="large" variant="outline" icon={<History size={16} />} loading={importing} disabled={importing || loading} onClick={() => handleImportHistory(false)}>导入历史</Button>
           </Tooltip>
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--td-text-color-placeholder)' }}>
-            <Clock size={14} /><span>交易日次日 8 点更新</span>
+            <Clock size={14} /><span>交易日当日 20:00 更新</span>
           </div>
         </div>
       </Card>
@@ -518,7 +522,7 @@ export function SectorEffectPage() {
                         <td className="rest-cell" colSpan={Math.min(data.maxCols, 11)}
                           style={{ backgroundColor: restStyle.bg, color: restStyle.fg }}>
                           {restStyle.label}
-                          {row.dayType === 'today' && ' · 今日待更新，交易日次日 8 点更新'}
+                          {row.dayType === 'today' && ' · 今日待更新，今晚 20:00 更新'}
                         </td>
                       </tr>
                     );

@@ -15,7 +15,7 @@ import { SECTOR_EFFECT_HISTORY, type SectorDayType } from "./sectorEffectHistory
  * 6. 不把涨停家数直接当作板块强度或买卖建议。
  *
  * 数据保留：每次手动/自动更新都会 UPSERT 到 SQLite，历史行不丢失。
- * 自动更新：每个交易日 08:00 自动抓取最近交易日的涨停数据并入库。
+ * 自动更新：每个交易日 20:00 自动抓取当日收盘涨停数据并入库（当日标签，不再错位到次日）。
  */
 
 const EM_UT = "7eea3edcaed734bea9cbfc24409ed989";
@@ -500,7 +500,7 @@ function ensureHistorySeeded(): void {
   }
 }
 
-// ============= 交易日 8:00 自动更新调度器 =============
+// ============= 交易日 20:00 自动更新调度器 =============
 
 let autoUpdateTimer: ReturnType<typeof setInterval> | null = null;
 let lastAutoUpdateDate: string = '';  // 避免同一天重复更新
@@ -511,19 +511,19 @@ function isWeekday(d: Date): boolean {
   return day >= 1 && day <= 5;
 }
 
-/** 启动自动更新定时器：每个交易日 08:00 触发 */
+/** 启动自动更新定时器：每个交易日 20:00 触发（当日标签，避免日期错位） */
 export function startAutoUpdateScheduler(): void {
   if (autoUpdateTimer) return;  // 已启动
 
-  // 每分钟检查一次是否到了 08:00 且是工作日
+  // 每分钟检查一次是否到了 20:00 且是工作日
   autoUpdateTimer = setInterval(async () => {
     try {
       const now = new Date();
       const todayToken = toDateToken(now);
 
-      // 跳过：非工作日 / 非 08:xx / 当天已更新过
+      // 跳过：非工作日 / 非 20:xx / 当天已更新过
       if (!isWeekday(now)) return;
-      if (now.getHours() !== 8) return;
+      if (now.getHours() !== 20) return;
       if (lastAutoUpdateDate === todayToken) return;
 
       console.log(`[SectorEffect] 自动更新触发: ${todayToken}`);
@@ -535,7 +535,7 @@ export function startAutoUpdateScheduler(): void {
     }
   }, 60000);  // 每分钟检查一次
 
-  console.log('[SectorEffect] 自动更新调度器已启动（交易日 08:00）');
+  console.log('[SectorEffect] 自动更新调度器已启动（交易日 20:00 当日入库）');
 }
 
 // ============= 路由注册 =============
@@ -705,6 +705,8 @@ export function registerSectorEffectRoutes(app: express.Express): void {
   app.post("/api/sector-effect/refresh", async (req, res) => {
     try {
       const rawDate = String(req.body.date || req.query.date || "").replace(/-/g, "").trim();
+      // 注意：东财涨停池不支持历史日期查询（qdate 会被回写为最近交易日），
+      // 因此默认刷新目标只能是「今天」。指定 date 时也仅对最近交易日有效。
       const targetDate = /^\d{8}$/.test(rawDate) ? rawDate : toDateToken(new Date());
       const force = !!(req.body?.force ?? req.query.force === "true");
 
