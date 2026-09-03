@@ -1,6 +1,6 @@
 import { Button, Tooltip } from 'tdesign-react';
 import { AddIcon, DeleteIcon, SettingIcon } from 'tdesign-icons-react';
-import { Bot, TrendingUp, Building2, Radar, Flame } from 'lucide-react';
+import { Bot, TrendingUp, Building2, Radar, Flame, Microscope } from 'lucide-react';
 import { APP_CONFIG } from '../config';
 import { Session, Agent } from '../types';
 import { ICON_MAP } from '../utils/iconMap';
@@ -13,6 +13,7 @@ interface SidebarProps {
   isMonitorPage: boolean;
   isIndustryChainPage: boolean;
   isSectorEffectPage: boolean;
+  isDeepDivePage: boolean;
   isMainstreamPage: boolean;
   sidebarOpen: boolean;
   agents: Agent[];
@@ -23,6 +24,7 @@ interface SidebarProps {
   onOpenSettings: () => void;
   onOpenMonitor: () => void;
   onOpenSectorEffect: () => void;
+  onOpenDeepDive: () => void;
   onOpenMainstream: () => void;
   onOpenIndustryChain: () => void;
 }
@@ -34,6 +36,7 @@ export function Sidebar({
   isMonitorPage,
   isIndustryChainPage,
   isSectorEffectPage,
+  isDeepDivePage,
   isMainstreamPage,
   sidebarOpen,
   agents,
@@ -44,6 +47,7 @@ export function Sidebar({
   onOpenSettings,
   onOpenMonitor,
   onOpenSectorEffect,
+  onOpenDeepDive,
   onOpenMainstream,
   onOpenIndustryChain,
 }: SidebarProps) {
@@ -73,19 +77,7 @@ export function Sidebar({
         </div>
       </div>
 
-      {/* 新对话按钮 */}
-      <div className="p-3">
-        <Button 
-          icon={<AddIcon />}
-          onClick={onNewChat}
-          block
-          variant="outline"
-        >
-          新对话
-        </Button>
-      </div>
-
-      {/* 顶部功能导航：按“板块效应 → 行情监控 → 涨停异动分析 → 板块产业链”排列 */}
+      {/* 顶部功能导航：按“板块效应 → 个股深度挖掘 → 行情监控 → 涨停异动分析 → 板块产业链”排列 */}
       <div className="px-3 pb-3 flex flex-col gap-2 flex-shrink-0">
         <Button
           icon={<Flame size={16} />}
@@ -95,6 +87,15 @@ export function Sidebar({
           theme={isSectorEffectPage ? 'primary' : 'default'}
         >
           板块效应
+        </Button>
+        <Button
+          icon={<Microscope size={16} />}
+          onClick={onOpenDeepDive}
+          block
+          variant={isDeepDivePage ? 'outline' : 'text'}
+          theme={isDeepDivePage ? 'primary' : 'default'}
+        >
+          个股深度挖掘
         </Button>
         <Button
           icon={<TrendingUp size={16} />}
@@ -189,6 +190,15 @@ export function Sidebar({
           theme={isSettingsPage ? 'primary' : 'default'}
         >
           设置
+        </Button>
+        {/* 新对话按钮（移到底部，便于在会话列表滚动后快速新建） */}
+        <Button 
+          icon={<AddIcon />}
+          onClick={onNewChat}
+          block
+          variant="outline"
+        >
+          新对话
         </Button>
       </div>
     </aside>

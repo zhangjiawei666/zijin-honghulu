@@ -54,6 +54,7 @@ import { monitor, fetchStockNames, fetchRealtimeQuotes } from "./monitor.js";
 import { registerChainRoutes } from "./chain.js";
 import { registerMainstreamRoutes } from "./mainstream.js";
 import { registerSectorEffectRoutes } from "./sectorEffect.js";
+import { registerDeepDiveRoutes } from "./deepdive.js";
 
 const execAsync = promisify(exec);
 
@@ -1026,6 +1027,7 @@ app.get("/api/monitor/signals", (req, res) => {
 registerChainRoutes(app);
 registerMainstreamRoutes(app);
 registerSectorEffectRoutes(app);
+registerDeepDiveRoutes(app);
 
 // ============= 生产模式静态服务（桌面打包后由 Express 直接提供前端页面） =============
 

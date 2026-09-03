@@ -10,6 +10,7 @@ import { IndustryChainPage } from './pages/IndustryChainPage';
 import { MainstreamMiningPage } from './pages/MainstreamMiningPage';
 import { MonitorPage } from './pages/MonitorPage';
 import { SectorEffectPage } from './pages/SectorEffectPage';
+import { StockDeepDivePage } from './pages/StockDeepDivePage';
 import { useAgents } from './hooks/useAgents';
 import { useChat } from './hooks/useChat';
 import { useModels } from './hooks/useModels';
@@ -80,19 +81,22 @@ function AppContent() {
   const path = location.pathname;
   const isSettingsPage = path === '/settings';
   const isSectorEffectPage = path === '/sector-effect';
+  const isDeepDivePage = path === '/deep-dive';
   const isMonitorPage = path === '/monitor';
   const isMainstreamPage = path === '/mainstream-mining';
   const isIndustryChainPage = path === '/industry-chain';
 
   const pageTitle = isSectorEffectPage
     ? '板块效应'
-    : isMonitorPage
-      ? '行情监控'
-      : isMainstreamPage
-        ? '涨停异动分析'
-        : isIndustryChainPage
-          ? '板块产业链'
-          : undefined;
+    : isDeepDivePage
+      ? '个股深度挖掘'
+      : isMonitorPage
+        ? '行情监控'
+        : isMainstreamPage
+          ? '涨停异动分析'
+          : isIndustryChainPage
+            ? '板块产业链'
+            : undefined;
 
   const goChat = useCallback(
     (sessionId: string | null) => {
@@ -162,6 +166,7 @@ function AppContent() {
         currentSessionId={currentSessionId}
         isSettingsPage={isSettingsPage}
         isSectorEffectPage={isSectorEffectPage}
+        isDeepDivePage={isDeepDivePage}
         isMonitorPage={isMonitorPage}
         isIndustryChainPage={isIndustryChainPage}
         isMainstreamPage={isMainstreamPage}
@@ -173,6 +178,7 @@ function AppContent() {
         onDeleteSession={handleDeleteSession}
         onOpenSettings={() => navigate('/settings')}
         onOpenSectorEffect={() => navigate('/sector-effect')}
+        onOpenDeepDive={() => navigate('/deep-dive')}
         onOpenMonitor={() => navigate('/monitor')}
         onOpenMainstream={() => navigate('/mainstream-mining')}
         onOpenIndustryChain={() => navigate('/industry-chain')}
@@ -200,6 +206,7 @@ function AppContent() {
             <Route path="/chat" element={<Navigate to="/" replace />} />
             <Route path="/chat/:sessionId" element={chatPage} />
             <Route path="/sector-effect" element={<SectorEffectPage />} />
+            <Route path="/deep-dive" element={<StockDeepDivePage />} />
             <Route path="/monitor" element={<MonitorPage />} />
             <Route path="/mainstream-mining" element={<MainstreamMiningPage />} />
             <Route path="/industry-chain" element={<IndustryChainPage />} />
